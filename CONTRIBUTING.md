@@ -9,7 +9,10 @@ after two weeks is welcome.
 
 The package is not released yet: milestone 5b4 of Varyk's
 [roadmap](https://github.com/Varyk-Lang/varyk/blob/main/docs/roadmap.md)
-is the brief, and the design spec is written before the code. Until the
+is the brief. The compiler side of the design is Varyk's
+[5b4 spec](https://github.com/Varyk-Lang/varyk/blob/main/docs/specs/2026-10-05-milestone-5b4-design.md),
+whose section 6 is the contract this package implements; the package
+side goes in `docs/specs/` here, written before the code. Until the
 code lands, the most useful contribution is a comment on that design,
 as an issue here or in Varyk's
 [Discussions](https://github.com/Varyk-Lang/varyk/discussions).
@@ -42,15 +45,19 @@ let-chains or other later features.
 ## Where things are
 
 - `src/lib.vr` is everything a program sees; the `.rs` files beside it,
-  the facade over the Rust HTTP crates, are the only Rust. They never
-  panic: no `unwrap`, `expect`, or indexing that can fail, and every
-  failure becomes a `varyk_std::Error`. An error without a status is a
-  500 whose message is logged and not sent, so no internal failure
-  reaches a client.
+  the facade over axum, tower-http, and reqwest, are the only Rust. They
+  never panic: no `unwrap`, `expect`, or indexing that can fail, and
+  every failure becomes a `varyk_std::Error`. An error without a status
+  is a 500 whose message is logged and not sent, so no internal failure
+  reaches a client. The items the compiler's generated Rust calls
+  (section 6 of the 5b4 spec) change only with a varyk release.
 - `src/tests.vr` holds the tests, as a module: a Varyk package may not
-  have a `tests/`, `examples/`, or `benches/` directory.
-- `docs/specs/` holds the design; read it before changing what the
-  package offers.
+  have a `tests/`, `examples/`, or `benches/` directory. They send
+  requests through `app.request`, so no test binds a port.
+- `demo/users` is the users API on `varyk-sql`, the program the README's
+  fifteen-minute path ends at; CI builds and runs it.
+- `docs/specs/` holds the package's design; read it, and the compiler's
+  5b4 spec, before changing what the package offers.
 
 Rust code follows Varyk's
 [AGENTS.md](https://github.com/Varyk-Lang/varyk/blob/main/AGENTS.md):
