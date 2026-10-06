@@ -403,9 +403,9 @@ Save an upload under a name and extension the program chooses, as
 above, never under `part.file_name()`, which is whatever the client
 sent. `save_to` refuses a name by the rule of `Response::file` and
 writes to a temporary file first, so a failed upload leaves nothing
-behind. A part's content is read once. The whole form counts against
-the body limit: past it, the request is a 413 whatever the handler
-returns. A request that is not `multipart/form-data` is a 400.
+behind. A part's content is read once. What the handler reads counts
+against the body limit: past it, the request is a 413 whatever the
+handler returns. What it leaves unread is never read. A request that is not `multipart/form-data` is a 400.
 
 ## The client
 

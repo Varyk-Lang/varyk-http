@@ -63,12 +63,11 @@ code building on Rust 1.85 (no let-chains).
   answered as a 500.
 - **No internal failure reaches a client.** An error without a status is
   a 500: its message is logged with the method and path and not sent,
-  and the body is fixed. An error with a status from 400 to 599 sends its message; any other
-  status is a 500 too. A
-  response never carries a secret, a backtrace, a file path, or the text
-  of a dependency's error, except the JSON parser's message about a body
-  the client sent, in a 400, which describes only the client's own
-  input.
+  and the body is fixed. An error with a status from 400 to 599 sends
+  its message; any other status is a 500 too. A response never carries
+  a secret, a backtrace, a file path, or the text of a dependency's
+  error, except the JSON parser's message about a body the client
+  sent, in a 400, which describes only the client's own input.
 - **Safe by default.** The package faces the network. Request tracing,
   a body limit, a request timeout, panic containment, and graceful
   shutdown are on without being asked; CORS, compression, and a limit on

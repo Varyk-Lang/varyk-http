@@ -403,11 +403,12 @@ through `Multipart`, an `Err` for a part whose index has moved on. Two
 parts held at once are therefore fine. `save_to`
 refuses a `name` by the rule of `Response::file` (an `Err`, nothing
 written) and writes to a temporary file in `dir` first, renamed into
-place when complete, so a failed upload leaves no partial file. The whole
-request, every part included, counts against the body limit: a request
-whose declared length is over it is a 413 before the handler runs, and a
-part whose content crosses it while being read is an `Err` to the
-handler; the stream marks the `Multipart`'s shared state as over the
+place when complete, so a failed upload leaves no partial file. The
+request counts against the body limit as it is read: a request whose
+declared length is over it is a 413 before the handler runs, and a part
+whose content crosses it while being read is an `Err` to the handler
+(what the handler leaves unread is never read, so it costs no memory and
+is not counted); the stream marks the `Multipart`'s shared state as over the
 limit, and when the handler returns, whatever it returns, the route
 wrapper answers the 413 `{"error": "body too large"}` instead, with
 nothing logged as an error, since the fault is the client's. Every
@@ -654,8 +655,10 @@ preflight's) is labelled `unmatched`. The timeout is the route
 wrapper's too, not a layer's: it bounds the hooks, the body read, and
 the adapter until a response, with tokio's timer, so a request over it
 is a 503 `{"error": "request timed out"}` that keeps its route's label
-and passes through `after` hooks; a live connection is not timed once
-its early response is sent. `before`
+and passes through `after` hooks; the `after` hooks run within what is
+left of the deadline, in the route wrapper and the fallbacks alike, and
+when they overrun it the 503 is sent without them. A live connection is
+not timed once its early response is sent. `before`
 hooks are given to each route's wrapper (section 6.3); `after` hooks run
 on the package's own `Response`, before it becomes axum's, in the route
 wrapper and in the two fallbacks (the 404, and the 405 set with axum's
