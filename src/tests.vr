@@ -1,0 +1,1800 @@
+// The package's tests, run by `varyk test` from the package's folder.
+
+// The error constructors (spec 2.4): each gives its status and keeps the
+// message as written.
+
+#[test]
+fn bad_request_is_a_400() {
+    let e = crate::bad_request("the name is empty");
+    assert_eq(e.status(), Some(400));
+    assert_eq(e.message(), "the name is empty");
+}
+
+#[test]
+fn unauthorized_is_a_401() {
+    let e = crate::unauthorized("no key");
+    assert_eq(e.status(), Some(401));
+    assert_eq(e.message(), "no key");
+}
+
+#[test]
+fn forbidden_is_a_403() {
+    let e = crate::forbidden("not yours");
+    assert_eq(e.status(), Some(403));
+    assert_eq(e.message(), "not yours");
+}
+
+#[test]
+fn not_found_is_a_404() {
+    let e = crate::not_found("no such user");
+    assert_eq(e.status(), Some(404));
+    assert_eq(e.message(), "no such user");
+}
+
+#[test]
+fn conflict_is_a_409() {
+    let e = crate::conflict("the name is taken");
+    assert_eq(e.status(), Some(409));
+    assert_eq(e.message(), "the name is taken");
+}
+
+#[test]
+fn error_keeps_the_status_given() {
+    let e = crate::error(422, "the date is in the past");
+    assert_eq(e.status(), Some(422));
+    assert_eq(e.message(), "the date is in the past");
+}
+
+// A status outside 400 to 599 is kept as given; the package sends it as
+// a 500.
+#[test]
+fn error_keeps_a_status_outside_the_error_range() {
+    let e = crate::error(200, "fine");
+    assert_eq(e.status(), Some(200));
+    assert_eq(e.message(), "fine");
+}
+
+// Routes through `app.request` (spec 2.2, 2.3, 6.1 to 6.3): every binding
+// kind and return shape, the package's 400s, 404, 405, 413, and 503, the
+// error rules, panics, cookies, and headers.
+
+mod handlers;
+
+struct Config {
+    word: string,
+}
+
+struct NewUser {
+    name: string,
+}
+
+struct User {
+    id: i64,
+    name: string,
+}
+
+async fn double(id: i64) -> i64 {
+    id * 2
+}
+
+async fn flip(flag: bool) -> bool {
+    !flag
+}
+
+async fn greet(name: string, config: Shared<Config>) -> string {
+    format!("{} {}", config.word, name)
+}
+
+async fn search(prefix: Option<string>, limit: u32) -> string {
+    match prefix {
+        Some(p) => format!("{} {}", p, limit),
+        None => format!("all {}", limit),
+    }
+}
+
+async fn create(user: NewUser) -> Result<crate::Response, Error> {
+    if user.name.is_empty() {
+        return Err(crate::bad_request("a user needs a name"));
+    }
+    let created = User { id: 7, name: user.name.clone() };
+    let mut r = crate::Response::json(created);
+    r.set_status(201);
+    r.set_header("location", "/users/7");
+    Ok(r)
+}
+
+async fn ping() {}
+
+async fn find(id: i64) -> Option<User> {
+    if id == 1 {
+        return Some(User { id: 1, name: "Ada" });
+    }
+    None
+}
+
+async fn lookup(id: i64) -> Result<Option<User>, Error> {
+    if id < 0 {
+        return Err(crate::bad_request("the id is negative"));
+    }
+    Ok(find_user(id))
+}
+
+fn find_user(id: i64) -> Option<User> {
+    if id == 1 {
+        return Some(User { id: 1, name: "Ada" });
+    }
+    None
+}
+
+async fn names() -> Vec<string> {
+    vec!["Ada", "Bo"]
+}
+
+async fn plain() -> crate::Response {
+    crate::Response::text("just text")
+}
+
+async fn echo(req: crate::Request) -> string {
+    match req.header("X-Name") {
+        Some(name) => format!("{} {} {}", req.method(), req.path(), name),
+        None => "no name",
+    }
+}
+
+async fn session(req: crate::Request) -> string {
+    match req.cookie("session") {
+        Some(value) => value,
+        None => "none",
+    }
+}
+
+async fn fail(kind: string) -> Result<string, Error> {
+    if kind == "bad" {
+        return Err(crate::bad_request("bad input"));
+    }
+    if kind == "unauthorized" {
+        return Err(crate::unauthorized("who are you"));
+    }
+    if kind == "forbidden" {
+        return Err(crate::forbidden("not yours"));
+    }
+    if kind == "missing" {
+        return Err(crate::not_found("no such thing"));
+    }
+    if kind == "conflict" {
+        return Err(crate::conflict("taken"));
+    }
+    if kind == "teapot" {
+        return Err(crate::error(418, "short and stout"));
+    }
+    if kind == "fine" {
+        return Err(crate::error(200, "the database password is hunter2"));
+    }
+    if kind == "huge" {
+        return Err(crate::error(600, "the database password is hunter2"));
+    }
+    if kind == "plain" {
+        return Err(Error::new("the database password is hunter2"));
+    }
+    Ok("no error")
+}
+
+async fn crash() -> i64 {
+    let v: Vec<i64> = vec![1, 2];
+    v[5]
+}
+
+async fn slow() -> i64 {
+    time::sleep(2000).await;
+    1
+}
+
+async fn bad_header() -> crate::Response {
+    let mut r = crate::Response::text("x");
+    r.set_header("x-bad", "one\ntwo");
+    r
+}
+
+async fn bad_status() -> crate::Response {
+    let mut r = crate::Response::text("x");
+    r.set_status(700);
+    r
+}
+
+async fn cookies() -> crate::Response {
+    let mut r = crate::Response::empty();
+    r.set_cookie("session", "abc123", 3600);
+    r.set_cookie("old", "", 0);
+    r
+}
+
+async fn bad_cookie() -> crate::Response {
+    let mut r = crate::Response::empty();
+    r.set_cookie("session", "abc; Domain=evil.example", 3600);
+    r
+}
+
+fn build_app() -> crate::App {
+    let mut app = crate::App::new(Shared::new(Config { word: "hello" }));
+    app.get("/double/{id}", double);
+    app.get("/flip/{flag}", flip);
+    app.get("/greet/{name}", greet);
+    app.get("/search", search);
+    app.post("/users", create);
+    app.put("/users", create);
+    app.patch("/users", create);
+    app.delete("/ping", ping);
+    app.get("/ping", ping);
+    app.get("/users/{id}", find);
+    app.get("/lookup/{id}", lookup);
+    app.get("/names", names);
+    app.get("/plain", plain);
+    app.get("/echo", echo);
+    app.get("/session", session);
+    app.get("/fail/{kind}", fail);
+    app.get("/crash", crash);
+    app.get("/slow", slow);
+    app.get("/bad-header", bad_header);
+    app.get("/bad-status", bad_status);
+    app.get("/cookies", cookies);
+    app.get("/bad-cookie", bad_cookie);
+    app.get("/shout/{word}", handlers::shout);
+    app
+}
+
+async fn get(app: crate::App, path: string) -> crate::Response {
+    app.request(crate::Request::new("GET", path)).await
+}
+
+#[test]
+async fn a_path_parameter_binds_as_its_type() {
+    let app = build_app();
+    let r = get(app, "/double/21").await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.body(), "42");
+    assert_eq(r.header("content-type"), Some("application/json"));
+    let r = get(app, "/flip/true").await;
+    assert_eq(r.body(), "false");
+}
+
+#[test]
+async fn a_string_path_parameter_is_percent_decoded_and_reads_the_state() {
+    let app = build_app();
+    let r = get(app, "/greet/Ada%20L").await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.body(), "\"hello Ada L\"");
+}
+
+#[test]
+async fn a_path_parameter_that_does_not_parse_is_a_400() {
+    let app = build_app();
+    let r = get(app, "/double/abc").await;
+    assert_eq(r.status(), 400);
+    assert_eq(r.body(), "{\"error\":\"the path parameter `id` cannot be read from `abc`\"}");
+    let r = get(app, "/flip/yes").await;
+    assert_eq(r.status(), 400);
+}
+
+#[test]
+async fn query_parameters_bind_by_name() {
+    let app = build_app();
+    let r = get(app, "/search?limit=3&prefix=A%20B").await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.body(), "\"A B 3\"");
+    let r = get(app, "/search?limit=5").await;
+    assert_eq(r.body(), "\"all 5\"");
+}
+
+#[test]
+async fn a_query_parameter_that_does_not_parse_is_a_400() {
+    let app = build_app();
+    let r = get(app, "/search?limit=many").await;
+    assert_eq(r.status(), 400);
+    assert_eq(r.body(), "{\"error\":\"the query parameter `limit` cannot be read from `many`\"}");
+}
+
+#[test]
+async fn a_missing_required_query_parameter_is_a_400() {
+    let app = build_app();
+    let r = get(app, "/search?prefix=A").await;
+    assert_eq(r.status(), 400);
+    assert_eq(r.body(), "{\"error\":\"the query parameter `limit` is missing\"}");
+}
+
+#[test]
+async fn a_body_binds_from_json() {
+    let app = build_app();
+    let mut req = crate::Request::new("POST", "/users");
+    req.set_body("{\"name\":\"Bo\"}");
+    let r = app.request(req).await;
+    assert_eq(r.status(), 201);
+    assert_eq(r.header("location"), Some("/users/7"));
+    let user: Result<User, Error> = r.read_json();
+    match user {
+        Ok(u) => {
+            assert_eq(u.id, 7);
+            assert_eq(u.name, "Bo");
+        }
+        Err(e) => assert_eq(e.message(), "no error"),
+    }
+}
+
+#[test]
+async fn put_and_patch_bind_a_body_too() {
+    let app = build_app();
+    let mut req = crate::Request::new("PUT", "/users");
+    req.set_body("{\"name\":\"Cy\"}");
+    assert_eq(app.request(req).await.status(), 201);
+    let mut req = crate::Request::new("PATCH", "/users");
+    req.set_body("{\"name\":\"Di\"}");
+    assert_eq(app.request(req).await.status(), 201);
+}
+
+#[test]
+async fn a_body_that_is_not_json_of_the_type_is_a_400_with_the_parser_message() {
+    let app = build_app();
+    let mut req = crate::Request::new("POST", "/users");
+    req.set_body("{\"nom\":\"Bo\"}");
+    let r = app.request(req).await;
+    assert_eq(r.status(), 400);
+    assert_eq(r.body(), "{\"error\":\"the body `user` is not valid: missing field `name` at line 1 column 12\"}");
+    let mut req = crate::Request::new("POST", "/users");
+    req.set_body("not json");
+    let r = app.request(req).await;
+    assert_eq(r.status(), 400);
+    assert(r.body().starts_with("{\"error\":\"the body `user` is not valid: "));
+}
+
+#[test]
+async fn nothing_is_a_204() {
+    let app = build_app();
+    let r = get(app, "/ping").await;
+    assert_eq(r.status(), 204);
+    assert_eq(r.body(), "");
+    let r = app.request(crate::Request::new("DELETE", "/ping")).await;
+    assert_eq(r.status(), 204);
+}
+
+#[test]
+async fn an_option_is_a_200_or_a_404() {
+    let app = build_app();
+    let r = get(app, "/users/1").await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.body(), "{\"id\":1,\"name\":\"Ada\"}");
+    let r = get(app, "/users/2").await;
+    assert_eq(r.status(), 404);
+    assert_eq(r.body(), "{\"error\":\"not found\"}");
+}
+
+#[test]
+async fn a_result_of_an_option_gives_each_answer() {
+    let app = build_app();
+    assert_eq(get(app, "/lookup/1").await.status(), 200);
+    assert_eq(get(app, "/lookup/2").await.status(), 404);
+    let r = get(app, "/lookup/-1").await;
+    assert_eq(r.status(), 400);
+    assert_eq(r.body(), "{\"error\":\"the id is negative\"}");
+}
+
+#[test]
+async fn a_vec_is_a_json_array() {
+    let app = build_app();
+    let r = get(app, "/names").await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.body(), "[\"Ada\",\"Bo\"]");
+}
+
+#[test]
+async fn a_response_is_sent_as_built() {
+    let app = build_app();
+    let r = get(app, "/plain").await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.body(), "just text");
+    assert_eq(r.header("Content-Type"), Some("text/plain; charset=utf-8"));
+}
+
+#[test]
+async fn a_handler_reads_the_request_and_a_header_name_is_matched_without_case() {
+    let app = build_app();
+    let mut req = crate::Request::new("GET", "/echo?x=1");
+    req.set_header("x-name", "Ada");
+    let r = app.request(req).await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.body(), "\"GET /echo Ada\"");
+}
+
+#[test]
+async fn a_handler_reads_a_cookie() {
+    let app = build_app();
+    let mut req = crate::Request::new("GET", "/session");
+    req.set_header("cookie", "theme=dark; session=abc123");
+    let r = app.request(req).await;
+    assert_eq(r.body(), "\"abc123\"");
+    let r = get(app, "/session").await;
+    assert_eq(r.body(), "\"none\"");
+}
+
+#[test]
+async fn a_handler_in_another_module_answers() {
+    let app = build_app();
+    let r = get(app, "/shout/hey").await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.body(), "\"HEY\"");
+}
+
+#[test]
+async fn a_path_no_route_matches_is_a_404() {
+    let app = build_app();
+    let r = get(app, "/nowhere").await;
+    assert_eq(r.status(), 404);
+    assert_eq(r.body(), "{\"error\":\"not found\"}");
+    assert_eq(get(app, "/double/1/more").await.status(), 404);
+}
+
+#[test]
+async fn another_method_on_a_known_path_is_a_405_with_allow() {
+    let app = build_app();
+    let r = app.request(crate::Request::new("POST", "/ping")).await;
+    assert_eq(r.status(), 405);
+    assert_eq(r.body(), "{\"error\":\"method not allowed\"}");
+    assert_eq(r.header("allow"), Some("DELETE,GET,HEAD"));
+}
+
+#[test]
+async fn each_error_constructor_sends_its_status_and_message() {
+    let app = build_app();
+    let r = get(app, "/fail/bad").await;
+    assert_eq(r.status(), 400);
+    assert_eq(r.body(), "{\"error\":\"bad input\"}");
+    assert_eq(get(app, "/fail/unauthorized").await.status(), 401);
+    assert_eq(get(app, "/fail/forbidden").await.status(), 403);
+    assert_eq(get(app, "/fail/missing").await.status(), 404);
+    assert_eq(get(app, "/fail/conflict").await.status(), 409);
+    let r = get(app, "/fail/teapot").await;
+    assert_eq(r.status(), 418);
+    assert_eq(r.body(), "{\"error\":\"short and stout\"}");
+    assert_eq(get(app, "/fail/none").await.status(), 200);
+}
+
+#[test]
+async fn an_error_without_a_status_is_the_fixed_500() {
+    let app = build_app();
+    let r = get(app, "/fail/plain").await;
+    assert_eq(r.status(), 500);
+    assert_eq(r.body(), "{\"error\":\"internal error\"}");
+    assert_eq(r.header("content-type"), Some("application/json"));
+}
+
+#[test]
+async fn an_error_with_a_status_outside_400_to_599_is_the_fixed_500() {
+    let app = build_app();
+    let r = get(app, "/fail/fine").await;
+    assert_eq(r.status(), 500);
+    assert_eq(r.body(), "{\"error\":\"internal error\"}");
+    let r = get(app, "/fail/huge").await;
+    assert_eq(r.status(), 500);
+    assert_eq(r.body(), "{\"error\":\"internal error\"}");
+}
+
+#[test]
+async fn a_panic_in_a_handler_is_the_fixed_500() {
+    let app = build_app();
+    let r = get(app, "/crash").await;
+    assert_eq(r.status(), 500);
+    assert_eq(r.body(), "{\"error\":\"internal error\"}");
+    // The app still answers.
+    assert_eq(get(app, "/double/2").await.body(), "4");
+}
+
+#[test]
+async fn a_handler_slower_than_the_timeout_is_a_503() {
+    let mut app = build_app();
+    app.set_timeout(50);
+    let r = get(app, "/slow").await;
+    assert_eq(r.status(), 503);
+    assert_eq(r.body(), "{\"error\":\"request timed out\"}");
+}
+
+#[test]
+async fn a_declared_length_over_the_limit_is_a_413() {
+    let mut app = build_app();
+    app.set_body_limit(16);
+    let mut req = crate::Request::new("POST", "/users");
+    req.set_header("content-length", "5000");
+    req.set_body("{\"name\":\"Bo\"}");
+    let r = app.request(req).await;
+    assert_eq(r.status(), 413);
+    assert_eq(r.body(), "{\"error\":\"body too large\"}");
+}
+
+#[test]
+async fn a_body_crossing_the_limit_is_a_413() {
+    let mut app = build_app();
+    app.set_body_limit(16);
+    let mut req = crate::Request::new("POST", "/users");
+    req.set_body("{\"name\":\"a name longer than sixteen bytes\"}");
+    let r = app.request(req).await;
+    assert_eq(r.status(), 413);
+    assert_eq(r.body(), "{\"error\":\"body too large\"}");
+    let mut req = crate::Request::new("POST", "/users");
+    req.set_body("{\"name\":\"Bo\"}");
+    assert_eq(app.request(req).await.status(), 201);
+}
+
+#[test]
+async fn conflicting_routes_are_a_500_from_request() {
+    let mut app = crate::App::new(Shared::new(Config { word: "hello" }));
+    app.get("/users/{id}", find);
+    app.get("/users/{name}", greet);
+    let r = get(app, "/users/1").await;
+    assert_eq(r.status(), 500);
+    assert_eq(r.body(), "{\"error\":\"internal error\"}");
+}
+
+#[test]
+async fn routes_of_one_shape_with_other_names_and_methods_are_no_conflict() {
+    let mut app = crate::App::new(Shared::new(Config { word: "hello" }));
+    app.get("/users/{id}", find);
+    app.delete("/users/{name}", greet);
+    assert_eq(get(app, "/users/1").await.status(), 200);
+    let r = app.request(crate::Request::new("DELETE", "/users/Bo")).await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.body(), "\"hello Bo\"");
+}
+
+#[test]
+async fn an_invalid_header_value_is_a_500() {
+    let app = build_app();
+    let r = get(app, "/bad-header").await;
+    assert_eq(r.status(), 500);
+    assert_eq(r.body(), "{\"error\":\"internal error\"}");
+    assert_eq(r.header("x-bad"), None);
+}
+
+#[test]
+async fn a_status_outside_100_to_599_is_a_500() {
+    let app = build_app();
+    let r = get(app, "/bad-status").await;
+    assert_eq(r.status(), 500);
+    assert_eq(r.body(), "{\"error\":\"internal error\"}");
+}
+
+#[test]
+async fn an_invalid_request_is_a_500() {
+    let app = build_app();
+    let r = app.request(crate::Request::new("GE T", "/ping")).await;
+    assert_eq(r.status(), 500);
+    assert_eq(r.body(), "{\"error\":\"internal error\"}");
+    let r = app.request(crate::Request::new("GET", "ping")).await;
+    assert_eq(r.status(), 500);
+    let mut req = crate::Request::new("GET", "/ping");
+    req.set_header("x-bad", "one\ntwo");
+    assert_eq(app.request(req).await.status(), 500);
+    let mut req = crate::Request::new("GET", "/ping");
+    req.set_header("bad name", "x");
+    assert_eq(app.request(req).await.status(), 500);
+}
+
+#[test]
+async fn a_request_keeps_what_it_was_given() {
+    let mut req = crate::Request::new("GET", "/users?limit=2");
+    req.set_header("X-Key", "k1");
+    req.set_body("hello");
+    assert_eq(req.method(), "GET");
+    assert_eq(req.path(), "/users");
+    assert_eq(req.header("x-key"), Some("k1"));
+    assert_eq(req.header("x-other"), None);
+    assert_eq(req.body(), "hello");
+    assert_eq(req.cookie("session"), None);
+}
+
+#[test]
+async fn cookies_carry_their_attributes() {
+    let app = build_app();
+    let r = get(app, "/cookies").await;
+    assert_eq(r.status(), 204);
+    assert_eq(r.header("set-cookie"), Some("session=abc123; Path=/; Max-Age=3600; HttpOnly; Secure; SameSite=Lax"));
+}
+
+#[test]
+fn a_cookie_with_max_age_0_deletes_it() {
+    let mut r = crate::Response::empty();
+    r.set_cookie("old", "", 0);
+    assert_eq(r.header("set-cookie"), Some("old=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax"));
+}
+
+#[test]
+async fn a_cookie_value_that_could_add_attributes_is_a_500() {
+    let app = build_app();
+    let r = get(app, "/bad-cookie").await;
+    assert_eq(r.status(), 500);
+    assert_eq(r.body(), "{\"error\":\"internal error\"}");
+    assert_eq(r.header("set-cookie"), None);
+}
+
+#[test]
+fn each_response_constructor_gives_its_status() {
+    let r = crate::Response::json(vec![1, 2]);
+    assert_eq(r.status(), 200);
+    assert_eq(r.body(), "[1,2]");
+    assert_eq(r.header("content-type"), Some("application/json"));
+    let r = crate::Response::text("hi");
+    assert_eq(r.status(), 200);
+    assert_eq(r.header("content-type"), Some("text/plain; charset=utf-8"));
+    let r = crate::Response::empty();
+    assert_eq(r.status(), 204);
+    assert_eq(r.body(), "");
+    let mut r = crate::Response::text("hi");
+    r.set_header("X-Tag", "a");
+    r.set_header("x-tag", "b");
+    assert_eq(r.header("X-TAG"), Some("b"));
+}
+
+// Hooks (spec 2.2): every hook covers every route whatever the order of
+// registration, runs in registration order, and sees the responses the
+// router makes.
+
+async fn first_check(req: crate::Request) -> Result<bool, Error> {
+    match req.header("x-refuse") {
+        Some(_) => Err(crate::error(418, "refused by the first hook")),
+        None => Ok(true),
+    }
+}
+
+async fn second_check(req: crate::Request) -> Result<bool, Error> {
+    match req.header("x-refuse") {
+        Some(_) => Err(crate::error(418, "refused by the second hook")),
+        None => Ok(true),
+    }
+}
+
+async fn peek_body(req: crate::Request) -> Result<bool, Error> {
+    match req.header("x-peek") {
+        Some(_) => Err(crate::error(418, req.body())),
+        None => Ok(true),
+    }
+}
+
+async fn check_key(req: crate::Request, config: Shared<Config>) -> Result<bool, Error> {
+    match req.header("x-key") {
+        Some(key) => Ok(key == config.word),
+        None => Err(crate::unauthorized("an x-key header is needed")),
+    }
+}
+
+async fn mark_one(req: crate::Request, mut res: crate::Response) {
+    res.set_header("x-trail", "one");
+    res.set_header("x-seen-body", req.body());
+}
+
+async fn mark_two(req: crate::Request, mut res: crate::Response, config: Shared<Config>) {
+    let trail = match res.header("x-trail") {
+        Some(t) => t,
+        None => "none",
+    };
+    res.set_header("x-trail", format!("{} two {}", trail, config.word));
+}
+
+async fn echo_body(req: crate::Request) -> string {
+    req.body()
+}
+
+async fn admin_home() -> string {
+    "admin"
+}
+
+async fn admin_user(id: string) -> string {
+    format!("admin {}", id)
+}
+
+async fn public_page(name: string) -> string {
+    format!("page {}", name)
+}
+
+// Routes first, hooks after: the hooks still cover every route, and a
+// route added after the hooks too.
+fn hooked_app() -> crate::App {
+    let mut app = crate::App::new(Shared::new(Config { word: "hello" }));
+    app.get("/double/{id}", double);
+    app.post("/echo-body", echo_body);
+    app.get("/admin", admin_home);
+    app.get("/admin/{id}", admin_user);
+    app.before(first_check);
+    app.before(second_check);
+    app.before(peek_body);
+    app.before_on("/admin", check_key);
+    app.after(mark_one);
+    app.after(mark_two);
+    app.get("/administrators", admin_home);
+    app.get("/public/{name}", public_page);
+    app
+}
+
+#[test]
+async fn before_hooks_run_in_order_and_the_first_refusal_answers() {
+    let app = hooked_app();
+    let mut req = crate::Request::new("GET", "/double/2");
+    req.set_header("x-refuse", "yes");
+    let r = app.request(req).await;
+    assert_eq(r.status(), 418);
+    assert_eq(r.body(), "{\"error\":\"refused by the first hook\"}");
+}
+
+#[test]
+async fn hooks_cover_a_route_added_before_or_after_them() {
+    let app = hooked_app();
+    let mut req = crate::Request::new("GET", "/public/a");
+    req.set_header("x-refuse", "yes");
+    assert_eq(app.request(req).await.status(), 418);
+    let r = get(app, "/public/a").await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.body(), "\"page a\"");
+    assert_eq(r.header("x-trail"), Some("one two hello"));
+}
+
+#[test]
+async fn after_hooks_run_in_order_on_every_response() {
+    let app = hooked_app();
+    let r = get(app, "/double/2").await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.header("x-trail"), Some("one two hello"));
+    // A `before` hook's refusal.
+    let mut req = crate::Request::new("GET", "/double/2");
+    req.set_header("x-refuse", "yes");
+    assert_eq(app.request(req).await.header("x-trail"), Some("one two hello"));
+    // The package's 400.
+    let r = get(app, "/double/abc").await;
+    assert_eq(r.status(), 400);
+    assert_eq(r.header("x-trail"), Some("one two hello"));
+}
+
+#[test]
+async fn a_request_no_route_matches_runs_no_before_hook_but_the_after_hooks() {
+    let app = hooked_app();
+    let mut req = crate::Request::new("GET", "/nowhere");
+    req.set_header("x-refuse", "yes");
+    let r = app.request(req).await;
+    assert_eq(r.status(), 404);
+    assert_eq(r.body(), "{\"error\":\"not found\"}");
+    assert_eq(r.header("x-trail"), Some("one two hello"));
+    let mut req = crate::Request::new("DELETE", "/double/2");
+    req.set_header("x-refuse", "yes");
+    let r = app.request(req).await;
+    assert_eq(r.status(), 405);
+    assert_eq(r.header("x-trail"), Some("one two hello"));
+    assert_eq(r.header("allow"), Some("GET,HEAD"));
+}
+
+#[test]
+async fn a_hook_reads_the_same_body_as_the_handler() {
+    let app = hooked_app();
+    let mut req = crate::Request::new("POST", "/echo-body");
+    req.set_body("hello hooks");
+    let r = app.request(req).await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.body(), "\"hello hooks\"");
+    assert_eq(r.header("x-seen-body"), Some("hello hooks"));
+    let mut req = crate::Request::new("POST", "/echo-body");
+    req.set_header("x-peek", "yes");
+    req.set_body("hello hooks");
+    let r = app.request(req).await;
+    assert_eq(r.status(), 418);
+    assert_eq(r.body(), "{\"error\":\"hello hooks\"}");
+}
+
+#[test]
+async fn before_on_covers_the_routes_under_its_prefix() {
+    let app = hooked_app();
+    let r = get(app, "/admin").await;
+    assert_eq(r.status(), 401);
+    assert_eq(r.body(), "{\"error\":\"an x-key header is needed\"}");
+    assert_eq(get(app, "/admin/7").await.status(), 401);
+    let mut req = crate::Request::new("GET", "/admin/7");
+    req.set_header("x-key", "hello");
+    let r = app.request(req).await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.body(), "\"admin 7\"");
+    let mut req = crate::Request::new("GET", "/admin");
+    req.set_header("x-key", "wrong");
+    let r = app.request(req).await;
+    assert_eq(r.status(), 403);
+    assert_eq(r.body(), "{\"error\":\"forbidden\"}");
+}
+
+#[test]
+async fn before_on_does_not_cover_a_route_that_only_starts_with_its_text() {
+    let app = hooked_app();
+    let r = get(app, "/administrators").await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.body(), "\"admin\"");
+}
+
+// `before_on` tests the pattern the router matched, so no spelling of a
+// path reaches an admin route without the hook (plan, Review Focus 2).
+#[test]
+async fn before_on_matches_the_route_pattern_whatever_the_spelling() {
+    let app = hooked_app();
+    // Dots in a parameter still match `/admin/{id}`: the hook runs.
+    assert_eq(get(app, "/admin/%2E%2E").await.status(), 401);
+    assert_eq(get(app, "/admin/..").await.status(), 401);
+    // Other spellings match no route at all.
+    assert_eq(get(app, "/ADMIN/7").await.status(), 404);
+    assert_eq(get(app, "/admin/../admin/7").await.status(), 404);
+    assert_eq(get(app, "//admin/7").await.status(), 404);
+    assert_eq(get(app, "/admin/7/").await.status(), 404);
+    // A route outside the prefix stays outside, whatever its value says.
+    let r = get(app, "/public/..%2Fadmin%2F7").await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.body(), "\"page ../admin/7\"");
+}
+
+// CORS (spec 2.1): off until an origin is allowed, then only for it.
+
+fn cors_app() -> crate::App {
+    let mut app = build_app();
+    app.allow_origin("https://app.example");
+    app.allow_origin("http://localhost:5173");
+    app
+}
+
+#[test]
+async fn cors_headers_are_sent_for_an_allowed_origin_only() {
+    let app = cors_app();
+    let mut req = crate::Request::new("GET", "/double/2");
+    req.set_header("origin", "https://app.example");
+    let r = app.request(req).await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.header("access-control-allow-origin"), Some("https://app.example"));
+    assert_eq(r.header("access-control-allow-credentials"), None);
+    let mut req = crate::Request::new("GET", "/double/2");
+    req.set_header("origin", "http://localhost:5173");
+    let r = app.request(req).await;
+    assert_eq(r.header("access-control-allow-origin"), Some("http://localhost:5173"));
+    let mut req = crate::Request::new("GET", "/double/2");
+    req.set_header("origin", "https://evil.example");
+    let r = app.request(req).await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.header("access-control-allow-origin"), None);
+}
+
+#[test]
+async fn without_an_allowed_origin_no_cors_header_is_sent() {
+    let app = build_app();
+    let mut req = crate::Request::new("GET", "/double/2");
+    req.set_header("origin", "https://app.example");
+    let r = app.request(req).await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.header("access-control-allow-origin"), None);
+}
+
+#[test]
+async fn a_cors_preflight_is_answered_for_an_allowed_origin() {
+    let app = cors_app();
+    let mut req = crate::Request::new("OPTIONS", "/users");
+    req.set_header("origin", "https://app.example");
+    req.set_header("access-control-request-method", "POST");
+    req.set_header("access-control-request-headers", "content-type");
+    let r = app.request(req).await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.header("access-control-allow-origin"), Some("https://app.example"));
+    assert_eq(r.header("access-control-allow-methods"), Some("GET,POST,PUT,PATCH,DELETE"));
+    assert_eq(r.header("access-control-allow-headers"), Some("content-type,authorization"));
+    assert_eq(r.header("access-control-allow-credentials"), None);
+}
+
+#[test]
+async fn any_origin_is_allowed_with_a_star() {
+    let mut app = build_app();
+    app.allow_origin("*");
+    app.allow_origin("*");
+    let mut req = crate::Request::new("GET", "/double/2");
+    req.set_header("origin", "https://anyone.example");
+    let r = app.request(req).await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.header("access-control-allow-origin"), Some("*"));
+    assert_eq(r.header("access-control-allow-credentials"), None);
+}
+
+// Compression (spec 2.1): off until asked, then gzip for a client that
+// accepts it.
+
+async fn long_text() -> crate::Response {
+    crate::Response::text("a text long enough to be worth compressing, repeated: a text long enough to be worth compressing")
+}
+
+fn long_app() -> crate::App {
+    let mut app = crate::App::new(Shared::new(Config { word: "hello" }));
+    app.get("/long", long_text);
+    app
+}
+
+#[test]
+async fn compression_is_used_for_a_client_that_accepts_gzip() {
+    let mut app = long_app();
+    app.compress();
+    let mut req = crate::Request::new("GET", "/long");
+    req.set_header("accept-encoding", "gzip");
+    let r = app.request(req).await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.header("content-encoding"), Some("gzip"));
+    let r = get(app, "/long").await;
+    assert_eq(r.header("content-encoding"), None);
+    assert(r.body().starts_with("a text long enough"));
+}
+
+#[test]
+async fn without_compress_no_response_is_compressed() {
+    let app = long_app();
+    let mut req = crate::Request::new("GET", "/long");
+    req.set_header("accept-encoding", "gzip");
+    let r = app.request(req).await;
+    assert_eq(r.header("content-encoding"), None);
+    assert(r.body().starts_with("a text long enough"));
+}
+
+// Metrics (spec 2.7): each app counts its own requests, labelled by the
+// route pattern and a bounded method.
+
+#[test]
+async fn metrics_count_requests_by_method_route_and_status() {
+    let mut app = build_app();
+    app.metrics("/metrics");
+    assert_eq(get(app, "/double/2").await.status(), 200);
+    assert_eq(get(app, "/double/3").await.status(), 200);
+    assert_eq(app.request(crate::Request::new("PURGE", "/double/2")).await.status(), 405);
+    assert_eq(get(app, "/nowhere").await.status(), 404);
+    assert_eq(get(app, "/metrics").await.status(), 200);
+    let r = get(app, "/metrics").await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.header("content-type"), Some("text/plain; version=0.0.4; charset=utf-8"));
+    let text = r.body();
+    assert(text.contains("http_requests_total{method=\"GET\",route=\"/double/{id}\",status=\"200\"} 2"));
+    assert(text.contains("http_requests_total{method=\"other\",route=\"unmatched\",status=\"405\"} 1"));
+    assert(text.contains("http_requests_total{method=\"GET\",route=\"unmatched\",status=\"404\"} 1"));
+    assert(text.contains("http_request_duration_seconds_bucket{method=\"GET\",route=\"/double/{id}\",le=\"0.005\"}"));
+    assert(text.contains("http_request_duration_seconds_bucket{method=\"GET\",route=\"/double/{id}\",le=\"10\"} 2"));
+    assert(text.contains("http_request_duration_seconds_count{method=\"GET\",route=\"/double/{id}\"} 2"));
+    // The metrics path itself is not counted, and the path is never a label.
+    assert(!text.contains("/metrics"));
+    assert(!text.contains("/double/2"));
+}
+
+#[test]
+async fn the_metrics_path_answers_only_get_and_runs_no_hook() {
+    let mut app = hooked_app();
+    app.metrics("/metrics");
+    let mut req = crate::Request::new("GET", "/metrics");
+    req.set_header("x-refuse", "yes");
+    let r = app.request(req).await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.header("x-trail"), None);
+    let r = app.request(crate::Request::new("POST", "/metrics")).await;
+    assert_eq(r.status(), 405);
+    assert_eq(r.header("allow"), Some("GET,HEAD"));
+}
+
+#[test]
+async fn each_app_counts_its_own_requests() {
+    let mut one = build_app();
+    one.metrics("/metrics");
+    let mut two = build_app();
+    two.metrics("/metrics");
+    assert_eq(get(one, "/double/2").await.status(), 200);
+    let text = get(two, "/metrics").await.body();
+    assert(!text.contains("/double/{id}"));
+}
+
+#[test]
+async fn without_metrics_the_path_is_not_found() {
+    let app = build_app();
+    assert_eq(get(app, "/metrics").await.status(), 404);
+}
+
+// Settings (spec 2.1): a value that cannot work is recorded and makes
+// `request` the fixed 500; a setting called twice keeps the last value.
+
+// The status and body `GET /double/2` is answered with.
+async fn status_of(app: crate::App) -> string {
+    let r = get(app, "/double/2").await;
+    format!("{} {}", r.status(), r.body())
+}
+
+#[test]
+async fn settings_that_can_work_keep_the_app_answering() {
+    let mut app = build_app();
+    app.set_address("0.0.0.0");
+    app.set_address("::1");
+    app.set_body_limit(1);
+    app.set_body_limit(1024);
+    app.set_timeout(5000);
+    app.set_shutdown_grace(100);
+    app.set_idle_timeout(620000);
+    app.set_max_in_flight(8);
+    app.allow_origin("https://app.example");
+    app.compress();
+    app.metrics("/internal/metrics");
+    assert_eq(status_of(app).await, "200 4");
+}
+
+#[test]
+async fn a_limit_of_0_is_a_500() {
+    let mut a = build_app();
+    a.set_body_limit(0);
+    assert_eq(status_of(a).await, "500 {\"error\":\"internal error\"}");
+    let mut b = build_app();
+    b.set_timeout(0);
+    assert_eq(status_of(b).await, "500 {\"error\":\"internal error\"}");
+    let mut c = build_app();
+    c.set_shutdown_grace(0);
+    assert_eq(status_of(c).await, "500 {\"error\":\"internal error\"}");
+    let mut d = build_app();
+    d.set_max_in_flight(0);
+    assert_eq(status_of(d).await, "500 {\"error\":\"internal error\"}");
+    let mut e = build_app();
+    e.set_idle_timeout(0);
+    assert_eq(status_of(e).await, "500 {\"error\":\"internal error\"}");
+}
+
+#[test]
+async fn a_setting_called_twice_keeps_the_last_value() {
+    let mut app = build_app();
+    app.set_timeout(0);
+    app.set_timeout(1000);
+    assert_eq(status_of(app).await, "200 4");
+}
+
+#[test]
+async fn an_address_that_does_not_parse_is_a_500() {
+    let mut a = build_app();
+    a.set_address("localhost:3000");
+    assert_eq(status_of(a).await, "500 {\"error\":\"internal error\"}");
+    let mut b = build_app();
+    b.set_address("");
+    assert_eq(status_of(b).await, "500 {\"error\":\"internal error\"}");
+}
+
+#[test]
+async fn an_origin_that_is_not_a_url_origin_is_a_500() {
+    let mut a = build_app();
+    a.allow_origin("app.example");
+    assert_eq(status_of(a).await, "500 {\"error\":\"internal error\"}");
+    let mut b = build_app();
+    b.allow_origin("https://app.example/");
+    assert_eq(status_of(b).await, "500 {\"error\":\"internal error\"}");
+    let mut c = build_app();
+    c.allow_origin("ftp://app.example");
+    assert_eq(status_of(c).await, "500 {\"error\":\"internal error\"}");
+    let mut d = build_app();
+    d.allow_origin("https://user@app.example");
+    assert_eq(status_of(d).await, "500 {\"error\":\"internal error\"}");
+}
+
+#[test]
+async fn a_star_with_another_origin_is_a_500() {
+    let mut a = build_app();
+    a.allow_origin("*");
+    a.allow_origin("https://app.example");
+    assert_eq(status_of(a).await, "500 {\"error\":\"internal error\"}");
+    let mut b = build_app();
+    b.allow_origin("https://app.example");
+    b.allow_origin("*");
+    assert_eq(status_of(b).await, "500 {\"error\":\"internal error\"}");
+}
+
+#[test]
+async fn a_metrics_path_that_is_not_a_route_path_or_is_taken_is_a_500() {
+    let mut a = build_app();
+    a.metrics("metrics");
+    assert_eq(status_of(a).await, "500 {\"error\":\"internal error\"}");
+    let mut b = build_app();
+    b.metrics("/metrics/{name}");
+    assert_eq(status_of(b).await, "500 {\"error\":\"internal error\"}");
+    let mut c = build_app();
+    c.metrics("/ping");
+    assert_eq(status_of(c).await, "500 {\"error\":\"internal error\"}");
+    let mut d = build_app();
+    d.metrics("/metrics/");
+    assert_eq(status_of(d).await, "500 {\"error\":\"internal error\"}");
+}
+
+#[test]
+async fn the_in_flight_limit_lets_requests_through_below_it() {
+    let mut app = build_app();
+    app.set_max_in_flight(1);
+    assert_eq(get(app, "/double/2").await.status(), 200);
+    assert_eq(get(app, "/double/3").await.status(), 200);
+}
+
+// Panics (spec 2.1, 6.1): a panic in a hook is the fixed 500 from the
+// catch-panic layer, and the app answers on.
+
+async fn crashing_hook(req: crate::Request) -> Result<bool, Error> {
+    let v: Vec<i64> = vec![1];
+    if req.header("x-crash").is_some() {
+        return Ok(v[3] == 1);
+    }
+    Ok(true)
+}
+
+async fn crashing_after(req: crate::Request, mut res: crate::Response) {
+    let v: Vec<i64> = vec![1];
+    if req.header("x-crash-after").is_some() {
+        res.set_status(v[3] as u16);
+    }
+}
+
+#[test]
+async fn a_panic_in_a_hook_is_the_fixed_500() {
+    let mut app = crate::App::new(Shared::new(Config { word: "hello" }));
+    app.get("/double/{id}", double);
+    app.before(crashing_hook);
+    app.after(crashing_after);
+    let mut req = crate::Request::new("GET", "/double/2");
+    req.set_header("x-crash", "yes");
+    let r = app.request(req).await;
+    assert_eq(r.status(), 500);
+    assert_eq(r.body(), "{\"error\":\"internal error\"}");
+    assert_eq(r.header("content-type"), Some("application/json"));
+    let mut req = crate::Request::new("GET", "/nowhere");
+    req.set_header("x-crash-after", "yes");
+    let r = app.request(req).await;
+    assert_eq(r.status(), 500);
+    assert_eq(r.body(), "{\"error\":\"internal error\"}");
+    assert_eq(get(app, "/double/2").await.body(), "4");
+}
+
+// Files (spec 2.3): a file of the folder is served with the content type
+// of its extension; a name that leaves the folder, or could, is a 404
+// as a missing file is, so a client cannot tell them apart.
+
+async fn from_testdata(name: string) -> crate::Response {
+    crate::Response::file("testdata", name)
+}
+
+async fn from_target(name: string) -> crate::Response {
+    crate::Response::file("target", name)
+}
+
+async fn from_here(name: string) -> crate::Response {
+    crate::Response::file(".", name)
+}
+
+fn file_app() -> crate::App {
+    let mut app = crate::App::new(Shared::new(Config { word: "hello" }));
+    app.get("/testdata", from_testdata);
+    app.get("/target", from_target);
+    app.get("/here", from_here);
+    app
+}
+
+#[test]
+async fn a_file_is_served_with_the_content_type_of_its_extension() {
+    let app = file_app();
+    let r = get(app, "/testdata?name=hello.txt").await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.body(), "Hello from testdata.\n");
+    assert_eq(r.header("content-type"), Some("text/plain; charset=utf-8"));
+    assert_eq(r.header("x-content-type-options"), Some("nosniff"));
+}
+
+#[test]
+async fn a_name_that_leaves_the_folder_is_a_404() {
+    let app = file_app();
+    let names = vec![
+        "..%2FCargo.toml",
+        "%2Fetc%2Fhosts",
+        ".%2Fhello.txt",
+        "a%2F..%2Fhello.txt",
+        "a%2F%2Fhello.txt",
+        ".hidden",
+        "outside.txt",
+        "missing.txt",
+        "",
+    ];
+    for name in names.iter() {
+        let r = get(app, format!("/testdata?name={}", name)).await;
+        assert_eq(r.status(), 404);
+        assert_eq(r.body(), "{\"error\":\"not found\"}");
+    }
+}
+
+// Uploads (spec 2.5). A multipart body needs CRLF line breaks, which a
+// Varyk string literal cannot hold, so they come from JSON.
+
+fn crlf() -> string {
+    let parsed: Result<string, Error> = json::parse("\"\\r\\n\"");
+    match parsed {
+        Ok(text) => text.clone(),
+        Err(e) => e.message().clone(),
+    }
+}
+
+fn text_part(name: string, content: string) -> string {
+    let nl = crlf();
+    format!("--XyZ{}Content-Disposition: form-data; name=\"{}\"{}{}{}{}", nl, name, nl, nl, content, nl)
+}
+
+fn file_part(name: string, file_name: string, content: string) -> string {
+    let nl = crlf();
+    format!("--XyZ{}Content-Disposition: form-data; name=\"{}\"; filename=\"{}\"{}Content-Type: text/plain{}{}{}{}", nl, name, file_name, nl, nl, nl, content, nl)
+}
+
+fn form(path: string, parts: string) -> crate::Request {
+    let mut req = crate::Request::new("POST", path);
+    req.set_header("content-type", "multipart/form-data; boundary=XyZ");
+    req.set_body(format!("{}--XyZ--{}", parts, crlf()));
+    req
+}
+
+// Each part in turn: a text part's content, a file part saved under the
+// name the program chose, `saved`, never the client's.
+async fn upload(form: crate::Multipart, saved: string) -> Result<string, Error> {
+    let mut out = "";
+    while let Some(part) = form.next().await? {
+        match part.file_name() {
+            Some(file_name) => {
+                let written = part.save_to("target", saved).await?;
+                out.push_str(format!("{} {} {};", part.name(), file_name, written));
+            }
+            None => {
+                let text = part.text().await?;
+                out.push_str(format!("{}={};", part.name(), text));
+            }
+        }
+    }
+    Ok(out)
+}
+
+async fn read_twice(form: crate::Multipart) -> Result<string, Error> {
+    let part = match form.next().await? {
+        Some(part) => part,
+        None => { return Ok("no part"); }
+    };
+    let first = part.text().await?;
+    match part.text().await {
+        Ok(again) => Ok(format!("{} again {}", first, again)),
+        Err(e) => Ok(format!("{}, then: {}", first, e.message())),
+    }
+}
+
+async fn hold_two(form: crate::Multipart) -> Result<string, Error> {
+    let first = match form.next().await? {
+        Some(part) => part,
+        None => { return Ok("no first part"); }
+    };
+    let second = match form.next().await? {
+        Some(part) => part,
+        None => { return Ok("no second part"); }
+    };
+    let late = match first.text().await {
+        Ok(text) => format!("read {}", text),
+        Err(e) => e.message().clone(),
+    };
+    let text = second.text().await?;
+    Ok(format!("{}; {}={}", late, second.name(), text))
+}
+
+// Gives up on the first error and answers 200: a body over the limit is
+// still the 413.
+async fn quiet(form: crate::Multipart) -> string {
+    match form.next().await {
+        Ok(Some(part)) => match part.text().await {
+            Ok(text) => text,
+            Err(e) => e.message().clone(),
+        },
+        Ok(None) => "none",
+        Err(e) => e.message().clone(),
+    }
+}
+
+fn upload_app() -> crate::App {
+    let mut app = crate::App::new(Shared::new(Config { word: "hello" }));
+    app.post("/upload", upload);
+    app.put("/upload", upload);
+    app.post("/twice", read_twice);
+    app.post("/two", hold_two);
+    app.post("/quiet", quiet);
+    app.get("/target", from_target);
+    app.get("/here", from_here);
+    app
+}
+
+#[test]
+async fn text_parts_are_read_and_a_file_part_is_saved_under_a_chosen_name() {
+    let app = upload_app();
+    let parts = format!("{}{}{}", text_part("title", "Hello"), text_part("tags", "a b"), file_part("doc", "../../etc/passwd", "file content"));
+    let r = app.request(form("/upload?saved=varyk-http-upload-1.txt", parts)).await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.body(), "\"title=Hello;tags=a b;doc ../../etc/passwd 12;\"");
+    let saved = get(app, "/target?name=varyk-http-upload-1.txt").await;
+    assert_eq(saved.status(), 200);
+    assert_eq(saved.body(), "file content");
+}
+
+#[test]
+async fn a_save_name_that_leaves_the_folder_is_an_err_and_writes_nothing() {
+    let app = upload_app();
+    let parts = file_part("doc", "a.txt", "file content");
+    let r = app.request(form("/upload?saved=..%2Fvaryk-http-escape.txt", parts)).await;
+    assert_eq(r.status(), 500);
+    assert_eq(r.body(), "{\"error\":\"internal error\"}");
+    assert_eq(get(app, "/here?name=varyk-http-escape.txt").await.status(), 404);
+    let parts = file_part("doc", "a.txt", "file content");
+    let r = app.request(form("/upload?saved=.varyk-http-hidden.txt", parts)).await;
+    assert_eq(r.status(), 500);
+}
+
+#[test]
+async fn a_part_is_read_once() {
+    let app = upload_app();
+    let r = app.request(form("/twice", text_part("title", "Hello"))).await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.body(), "\"Hello, then: the part \\\"title\\\" was read already\"");
+}
+
+// Two parts held at once (plan, Review Focus 3): the first can no longer
+// be read once the form has moved on, the second still can.
+#[test]
+async fn a_part_the_form_has_moved_past_is_an_err() {
+    let app = upload_app();
+    let parts = format!("{}{}", text_part("one", "first"), text_part("two", "second"));
+    let r = app.request(form("/two", parts)).await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.body(), "\"the part \\\"one\\\" cannot be read: the form has moved on to a later part; two=second\"");
+}
+
+#[test]
+async fn a_part_over_the_body_limit_is_a_413() {
+    let mut app = upload_app();
+    app.set_body_limit(200);
+    let mut long = "";
+    let mut i = 0;
+    while i < 30 {
+        long.push_str("0123456789");
+        i = i + 1;
+    }
+    let r = app.request(form("/quiet", text_part("big", long))).await;
+    assert_eq(r.status(), 413);
+    assert_eq(r.body(), "{\"error\":\"body too large\"}");
+    let r = app.request(form("/upload?saved=varyk-http-upload-2.txt", file_part("doc", "a.txt", long))).await;
+    assert_eq(r.status(), 413);
+    assert_eq(get(app, "/target?name=varyk-http-upload-2.txt").await.status(), 404);
+    let r = app.request(form("/quiet", text_part("small", "fits"))).await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.body(), "\"fits\"");
+}
+
+#[test]
+async fn a_form_with_a_declared_length_over_the_limit_is_a_413() {
+    let mut app = upload_app();
+    app.set_body_limit(200);
+    let mut req = form("/quiet", text_part("small", "fits"));
+    req.set_header("content-length", "500");
+    let r = app.request(req).await;
+    assert_eq(r.status(), 413);
+    assert_eq(r.body(), "{\"error\":\"body too large\"}");
+}
+
+#[test]
+async fn a_body_that_is_not_a_multipart_form_is_a_400() {
+    let app = upload_app();
+    let mut req = crate::Request::new("POST", "/quiet");
+    req.set_body("{\"name\":\"Bo\"}");
+    let r = app.request(req).await;
+    assert_eq(r.status(), 400);
+    assert_eq(r.body(), "{\"error\":\"the body is not a multipart/form-data form\"}");
+}
+
+#[test]
+async fn a_form_without_a_boundary_is_a_400() {
+    let app = upload_app();
+    let mut req = crate::Request::new("POST", "/quiet");
+    req.set_header("content-type", "multipart/form-data");
+    req.set_body(text_part("title", "Hello"));
+    let r = app.request(req).await;
+    assert_eq(r.status(), 400);
+    assert_eq(r.body(), "{\"error\":\"the multipart/form-data form has no boundary\"}");
+}
+
+// A form multer cannot read is an `Err` with no status: passed on with
+// `?`, it is the fixed 500, and none of multer's text reaches the client.
+#[test]
+async fn a_malformed_form_passed_on_is_the_fixed_500() {
+    let app = upload_app();
+    let mut req = crate::Request::new("POST", "/upload?saved=varyk-http-upload-3.txt");
+    req.set_header("content-type", "multipart/form-data; boundary=XyZ");
+    let nl = crlf();
+    req.set_body(format!("--XyZ{}Content-Disposition: form-data; name=\"a\"{}{}half a part", nl, nl, nl));
+    let r = app.request(req).await;
+    assert_eq(r.status(), 500);
+    assert_eq(r.body(), "{\"error\":\"internal error\"}");
+}
+
+// Server-sent events (spec 2.5): each event a `data:` line or several,
+// with an `event:` name when given; under `app.request` the events are
+// collected whole once the handler returns.
+
+async fn three_events(events: crate::Sse) -> Result<crate::Response, Error> {
+    events.send("one").await?;
+    events.send_event("tick", "two\nlines").await?;
+    events.send("three").await?;
+    Ok(crate::Response::empty())
+}
+
+async fn quiet_events(events: crate::Sse) {
+    let sent = events.send("only").await;
+    if let Err(e) = sent {
+        log::error("{}", e);
+    }
+}
+
+async fn bad_event(events: crate::Sse) -> Result<crate::Response, Error> {
+    match events.send_event("a\nb", "text").await {
+        Ok(_) => events.send("sent").await?,
+        Err(e) => events.send(e.message()).await?,
+    };
+    Ok(crate::Response::empty())
+}
+
+fn events_app() -> crate::App {
+    let mut app = crate::App::new(Shared::new(Config { word: "hello" }));
+    app.get("/events", three_events);
+    app.get("/quiet", quiet_events);
+    app.get("/bad-event", bad_event);
+    app
+}
+
+#[test]
+async fn an_event_stream_is_collected_whole_under_request() {
+    let app = events_app();
+    let r = get(app, "/events").await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.header("content-type"), Some("text/event-stream"));
+    assert_eq(r.header("cache-control"), Some("no-cache"));
+    assert_eq(r.body(), "data: one\n\nevent: tick\ndata: two\ndata: lines\n\ndata: three\n\n");
+    let r = get(app, "/quiet").await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.body(), "data: only\n\n");
+}
+
+#[test]
+async fn an_event_name_with_a_line_break_is_an_err() {
+    let app = events_app();
+    let r = get(app, "/bad-event").await;
+    assert_eq(r.body(), "data: the event name \"a\\nb\" cannot hold a line break\n\n");
+}
+
+// WebSockets (spec 2.5): a request `app.request` sends is never an
+// upgrade, so a WebSocket route answers it with a 400, upgrade headers or
+// not. The conversation itself is the Rust test in `live.rs`.
+
+async fn echo_socket(ws: crate::WebSocket) -> Result<crate::Response, Error> {
+    match ws.recv().await? {
+        Some(text) => ws.send(text).await?,
+        None => ws.close().await?,
+    };
+    Ok(crate::Response::empty())
+}
+
+async fn quiet_socket(ws: crate::WebSocket) {
+    let sent = ws.send("only").await;
+    if let Err(e) = sent {
+        log::error("{}", e);
+    }
+}
+
+#[test]
+async fn a_websocket_route_is_a_400_under_request() {
+    let mut app = crate::App::new(Shared::new(Config { word: "hello" }));
+    app.get("/socket", echo_socket);
+    app.get("/quiet-socket", quiet_socket);
+    let refused = "{\"error\":\"the request is not a WebSocket upgrade\"}";
+    let r = get(app, "/socket").await;
+    assert_eq(r.status(), 400);
+    assert_eq(r.body(), refused);
+    let r = get(app, "/quiet-socket").await;
+    assert_eq(r.status(), 400);
+    let mut req = crate::Request::new("GET", "/socket");
+    req.set_header("connection", "upgrade");
+    req.set_header("upgrade", "websocket");
+    req.set_header("sec-websocket-version", "13");
+    req.set_header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==");
+    let r = app.request(req).await;
+    assert_eq(r.status(), 400);
+    assert_eq(r.body(), refused);
+}
+
+// Against a real server (spec 7): `serve` on a fixed loopback port per
+// test, started as a detached task, which ends with the test.
+
+struct Note {
+    text: string,
+}
+
+async fn hello() -> string {
+    "hello"
+}
+
+async fn take_note(note: Note) -> Note {
+    Note { text: format!("got {}", note.text) }
+}
+
+async fn slow_hello() -> string {
+    time::sleep(500).await;
+    "slow"
+}
+
+fn redirect(to: string) -> crate::Response {
+    let mut r = crate::Response::empty();
+    r.set_status(302);
+    r.set_header("location", to);
+    r
+}
+
+async fn hop() -> crate::Response {
+    redirect("/hello")
+}
+
+async fn away_host() -> crate::Response {
+    redirect("http://localhost:41801/hello")
+}
+
+async fn away_port() -> crate::Response {
+    redirect("http://127.0.0.1:41899/hello")
+}
+
+async fn chain(n: i64) -> crate::Response {
+    redirect(format!("/chain/{}", n + 1))
+}
+
+fn served_app() -> crate::App {
+    let mut app = crate::App::new(Shared::new(Config { word: "hello" }));
+    app.get("/hello", hello);
+    app.post("/notes", take_note);
+    app.put("/notes", take_note);
+    app.patch("/notes", take_note);
+    app.delete("/hello", hello);
+    app.get("/slow", slow_hello);
+    app.get("/long", long_text);
+    app.get("/hop", hop);
+    app.get("/away-host", away_host);
+    app.get("/away-port", away_port);
+    app.get("/chain/{n}", chain);
+    app.get("/events", three_events);
+    app
+}
+
+// A client's `Err` as a response with status 0 and the message as its
+// body, so a test that expected a response shows the message.
+fn failed(e: Error) -> crate::Response {
+    let mut r = crate::Response::text(e.message());
+    r.set_status(0);
+    r
+}
+
+async fn fetch(client: crate::Client, url: string) -> crate::Response {
+    match client.get(url).await {
+        Ok(r) => r,
+        Err(e) => failed(e),
+    }
+}
+
+#[test]
+async fn the_client_gets_and_sends_json() {
+    let app = served_app();
+    app.serve(41801).detach();
+    time::sleep(50).await;
+    let client = crate::Client::new();
+    let r = fetch(client, "http://127.0.0.1:41801/hello").await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.body(), "\"hello\"");
+    assert_eq(r.header("content-type"), Some("application/json"));
+    let note = Note { text: "hi" };
+    let r = match client.post("http://127.0.0.1:41801/notes", note).await {
+        Ok(r) => r,
+        Err(e) => failed(e),
+    };
+    assert_eq(r.status(), 200);
+    assert_eq(r.body(), "{\"text\":\"got hi\"}");
+    let back: Result<Note, Error> = r.read_json();
+    match back {
+        Ok(n) => assert_eq(n.text, "got hi"),
+        Err(e) => assert_eq(e.message(), "no error"),
+    }
+    let r = match client.put("http://127.0.0.1:41801/notes", "not a note").await {
+        Ok(r) => r,
+        Err(e) => failed(e),
+    };
+    assert_eq(r.status(), 400);
+    let r = match client.patch("http://127.0.0.1:41801/notes", note).await {
+        Ok(r) => r,
+        Err(e) => failed(e),
+    };
+    assert_eq(r.body(), "{\"text\":\"got hi\"}");
+    let r = match client.delete("http://127.0.0.1:41801/hello").await {
+        Ok(r) => r,
+        Err(e) => failed(e),
+    };
+    assert_eq(r.body(), "\"hello\"");
+}
+
+#[test]
+async fn a_response_of_any_status_is_ok() {
+    let app = served_app();
+    app.serve(41802).detach();
+    time::sleep(50).await;
+    let client = crate::Client::new();
+    let r = fetch(client, "http://127.0.0.1:41802/nowhere").await;
+    assert_eq(r.status(), 404);
+    assert_eq(r.body(), "{\"error\":\"not found\"}");
+}
+
+#[test]
+async fn the_client_sends_its_headers() {
+    let mut app = crate::App::new(Shared::new(Config { word: "hello" }));
+    app.get("/echo", echo);
+    app.serve(41803).detach();
+    time::sleep(50).await;
+    let mut client = crate::Client::new();
+    client.set_header("x-name", "Ada");
+    let r = fetch(client, "http://127.0.0.1:41803/echo").await;
+    assert_eq(r.body(), "\"GET /echo Ada\"");
+}
+
+#[test]
+async fn a_response_slower_than_the_client_timeout_is_an_err() {
+    let app = served_app();
+    app.serve(41804).detach();
+    time::sleep(50).await;
+    let mut client = crate::Client::new();
+    client.set_timeout(100);
+    let r = fetch(client, "http://127.0.0.1:41804/slow").await;
+    assert_eq(r.status(), 0);
+    assert_eq(r.body(), "the request to http://127.0.0.1 timed out after 100 ms");
+}
+
+#[test]
+async fn a_body_over_the_client_limit_is_an_err() {
+    let app = served_app();
+    app.serve(41805).detach();
+    time::sleep(50).await;
+    let mut client = crate::Client::new();
+    client.set_body_limit(10);
+    let r = fetch(client, "http://127.0.0.1:41805/long").await;
+    assert_eq(r.status(), 0);
+    assert_eq(r.body(), "the response from http://127.0.0.1 is larger than the body limit of 10 bytes");
+    client.set_body_limit(1000);
+    let r = fetch(client, "http://127.0.0.1:41805/long").await;
+    assert_eq(r.status(), 200);
+}
+
+#[test]
+async fn a_redirect_is_followed_only_to_the_same_origin() {
+    let app = served_app();
+    app.serve(41806).detach();
+    time::sleep(50).await;
+    let client = crate::Client::new();
+    let r = fetch(client, "http://127.0.0.1:41806/hop").await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.body(), "\"hello\"");
+    let r = fetch(client, "http://127.0.0.1:41806/away-host").await;
+    assert_eq(r.status(), 302);
+    assert_eq(r.header("location"), Some("http://localhost:41801/hello"));
+    let r = fetch(client, "http://127.0.0.1:41806/away-port").await;
+    assert_eq(r.status(), 302);
+    assert_eq(r.header("location"), Some("http://127.0.0.1:41899/hello"));
+    // Ten redirects are followed; the eleventh is given back.
+    let r = fetch(client, "http://127.0.0.1:41806/chain/0").await;
+    assert_eq(r.status(), 302);
+    assert_eq(r.header("location"), Some("/chain/11"));
+}
+
+// Plan, Review Focus 5: a URL whose path and query carry a secret, failing
+// to connect: the message names only the scheme and host.
+#[test]
+async fn a_client_error_names_only_the_scheme_and_host() {
+    let client = crate::Client::new();
+    let r = fetch(client, "http://127.0.0.1:1/private/path?token=s3cret").await;
+    assert_eq(r.status(), 0);
+    let message = r.body();
+    assert(message.starts_with("the request to http://127.0.0.1 failed: "));
+    assert(!message.contains("private"));
+    assert(!message.contains("s3cret"));
+    assert(!message.contains(":1/"));
+    let r = fetch(client, "ftp://example.com/file?token=s3cret").await;
+    assert_eq(r.body(), "the URL ftp://example.com is not http or https");
+    let r = fetch(client, "not a url").await;
+    assert_eq(r.body(), "the URL cannot be read: relative URL without a base");
+}
+
+#[test]
+async fn a_client_setting_that_cannot_work_is_the_err_of_every_call() {
+    let mut client = crate::Client::new();
+    client.set_header("x-token", "one\ntwo");
+    let r = fetch(client, "http://127.0.0.1:41807/hello").await;
+    assert_eq(r.body(), "the client cannot be built: set_header(\"x-token\", ..) cannot work: the name or the value is not valid HTTP");
+    let mut client = crate::Client::new();
+    client.set_timeout(0);
+    let r = fetch(client, "http://127.0.0.1:41807/hello").await;
+    assert_eq(r.body(), "the client cannot be built: set_timeout(0) cannot work: the timeout is at least 1 millisecond");
+    let mut client = crate::Client::new();
+    client.set_body_limit(0);
+    let r = fetch(client, "http://127.0.0.1:41807/hello").await;
+    assert_eq(r.body(), "the client cannot be built: set_body_limit(0) cannot work: the limit is at least 1 byte");
+}
+
+#[test]
+async fn three_events_are_read_whole_by_the_client() {
+    let app = served_app();
+    app.serve(41808).detach();
+    time::sleep(50).await;
+    let client = crate::Client::new();
+    let r = fetch(client, "http://127.0.0.1:41808/events").await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.header("content-type"), Some("text/event-stream"));
+    assert_eq(r.body(), "data: one\n\nevent: tick\ndata: two\ndata: lines\n\ndata: three\n\n");
+}
+
+async fn status_or_zero(client: crate::Client, url: string) -> u16 {
+    match client.get(url).await {
+        Ok(r) => r.status(),
+        Err(_) => 0,
+    }
+}
+
+#[test]
+async fn beyond_the_in_flight_limit_a_request_is_a_503() {
+    let mut app = served_app();
+    app.set_max_in_flight(1);
+    app.serve(41809).detach();
+    time::sleep(50).await;
+    let client = crate::Client::new();
+    let a = client.clone().get("http://127.0.0.1:41809/slow");
+    let b = client.clone().get("http://127.0.0.1:41809/slow");
+    let one = match a.await {
+        Ok(r) => r.status(),
+        Err(_) => 0,
+    };
+    let two = match b.await {
+        Ok(r) => r.status(),
+        Err(_) => 0,
+    };
+    assert((one == 200 && two == 503) || (one == 503 && two == 200));
+    // The permit is given back: the next request is served.
+    assert_eq(status_or_zero(client, "http://127.0.0.1:41809/hello").await, 200);
+}
+
+#[test]
+async fn serving_on_a_port_in_use_is_an_err() {
+    let app = served_app();
+    app.serve(41810).detach();
+    time::sleep(50).await;
+    let other = served_app();
+    match other.serve(41810).await {
+        Ok(_) => assert_eq("served", "an error"),
+        Err(e) => assert(e.message().starts_with("cannot serve on 127.0.0.1:41810: ")),
+    }
+}
+
+#[test]
+async fn a_setting_that_cannot_work_is_an_err_from_serve() {
+    let mut app = served_app();
+    app.set_timeout(0);
+    match app.serve(41811).await {
+        Ok(_) => assert_eq("served", "an error"),
+        Err(e) => assert_eq(e.message(), "cannot serve on 127.0.0.1:41811: set_timeout(0) cannot work: the timeout is at least 1 millisecond"),
+    }
+    let mut app = served_app();
+    app.set_address("::1");
+    app.set_body_limit(0);
+    match app.serve(41811).await {
+        Ok(_) => assert_eq("served", "an error"),
+        Err(e) => assert_eq(e.message(), "cannot serve on [::1]:41811: set_body_limit(0) cannot work: the limit is at least 1 byte"),
+    }
+    let mut app = served_app();
+    app.set_idle_timeout(0);
+    match app.serve(41811).await {
+        Ok(_) => assert_eq("served", "an error"),
+        Err(e) => assert_eq(e.message(), "cannot serve on 127.0.0.1:41811: set_idle_timeout(0) cannot work: the timeout is at least 1 millisecond"),
+    }
+}

@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# Until varyk 0.7 is on crates.io, both jobs install the compiler from
+# Varyk-Lang/varyk's `main`, at the commit of a clone whose
+# `crates/varyk-std` VARYK_STD_PATH names, so the two always match.
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install varyk
+        run: |
+          git clone --depth 1 https://github.com/Varyk-Lang/varyk "$RUNNER_TEMP/varyk"
+          rev="$(git -C "$RUNNER_TEMP/varyk" rev-parse HEAD)"
+          cargo install --git https://github.com/Varyk-Lang/varyk --rev "$rev" varyk --locked
+          echo "VARYK_STD_PATH=$RUNNER_TEMP/varyk/crates/varyk-std" >> "$GITHUB_ENV"
+
+      - name: Check
+        run: varyk check
+
+      - name: Test
+        run: varyk test
+
+      # The users API of the README, on varyk-sql and SQLite.
+      - name: Demo
+        working-directory: demo/users
+        run: varyk test
+
+      - name: Format check
+        run: rustfmt --edition 2024 --check src/*.rs
+
+      # The assembled crate's manifest is not patched, so clippy is given
+      # the same varyk-std the compiler uses.
+      - name: Clippy
+        run: |
+          crate="$(varyk publish --assemble-only)"
+          cd "$crate"
+          cargo clippy --all-targets --config "patch.crates-io.varyk-std.path='$VARYK_STD_PATH'" -- -D warnings
+
+  msrv:
+    runs-on: ubuntu-latest
+    env:
+      # Pins every cargo call to 1.85.
+      RUSTUP_TOOLCHAIN: "1.85"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.85
+
+      - name: Install varyk
+        run: |
+          git clone --depth 1 https://github.com/Varyk-Lang/varyk "$RUNNER_TEMP/varyk"
+          rev="$(git -C "$RUNNER_TEMP/varyk" rev-parse HEAD)"
+          cargo install --git https://github.com/Varyk-Lang/varyk --rev "$rev" varyk --locked
+          echo "VARYK_STD_PATH=$RUNNER_TEMP/varyk/crates/varyk-std" >> "$GITHUB_ENV"
+
+      - name: Check
+        run: varyk check
+
+      - name: Test
+        run: varyk test
