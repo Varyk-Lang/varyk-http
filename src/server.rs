@@ -580,6 +580,7 @@ impl App {
         let fallback = Arc::new(Fallback {
             state: Arc::clone(&self.state),
             afters: Arc::clone(&afters),
+            timeout: deadline,
         });
         let mut router = axum::Router::new();
         if let Some((path, recorder)) = metrics {
@@ -924,10 +925,11 @@ impl Wrapper {
                 }
             }
         };
-        let mut response = response;
-        for after in self.afters.iter() {
-            response = after(request.clone(), response).await;
-        }
+        // The `after` hooks run within what is left of the deadline, so a
+        // hook that hangs is the 503 too.
+        let response = within(deadline, run_afters(&self.afters, &request, response))
+            .await
+            .unwrap_or_else(timed_out);
         let mut sent = response.into_sent(&method, &path);
         sent.extensions_mut()
             .insert(RoutePattern(Arc::clone(&self.pattern)));
@@ -1013,6 +1015,7 @@ impl Wrapper {
 struct Fallback {
     state: State,
     afters: Arc<Vec<AfterRun>>,
+    timeout: Duration,
 }
 
 impl Fallback {
@@ -1024,12 +1027,21 @@ impl Fallback {
         let (parts, _) = req.into_parts();
         let routed = Routed::new(Arc::clone(&self.state), Vec::new());
         let request = Request::received(&parts, Bytes::new(), routed);
-        let mut response = response;
-        for after in self.afters.iter() {
-            response = after(request.clone(), response).await;
-        }
+        let deadline = Instant::now().checked_add(self.timeout);
+        let response = within(deadline, run_afters(&self.afters, &request, response))
+            .await
+            .unwrap_or_else(timed_out);
         response.into_sent(parts.method.as_str(), parts.uri.path())
     }
+}
+
+/// Runs the `after` hooks on `response`, in registration order.
+async fn run_afters(afters: &[AfterRun], request: &Request, response: Response) -> Response {
+    let mut response = response;
+    for after in afters {
+        response = after(request.clone(), response).await;
+    }
+    response
 }
 
 /// `future`'s output, or `None` when `deadline` passes first.

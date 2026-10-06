@@ -76,8 +76,8 @@ let-chains or other later features.
   `benches/` directory. Its own module `src/tests/handlers.vr` holds a
   handler of another module, for a route that names one. Most send
   requests through `app.request`, with no port; the event-stream,
-  client, in-flight, WebSocket, and idle-timeout tests serve on a fixed loopback port,
-  from 41801 up, one port per test, so tests running at once never
+  client, in-flight, WebSocket, and idle-timeout tests serve on a fixed
+  loopback port, from 41801 up, one port per test, so tests running at once never
   share one. The file tests serve from `testdata/` (a text file, and a
   link pointing out of the folder that must stay refused), and the
   upload tests write under the git-ignored `target/`, so run `varyk
