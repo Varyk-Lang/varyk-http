@@ -9,6 +9,6 @@ name = "users"
 path = "src/main.vr"
 
 [dependencies]
-varyk-std = "0.6"
+varyk-std = "0.7"
 http = { package = "varyk-http", path = "../.." }
-sql = { version = "0.1", package = "varyk-sql" }
+sql = { version = "0.2", package = "varyk-sql" }

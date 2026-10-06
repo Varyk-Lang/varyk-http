@@ -29,10 +29,8 @@ offers.
 Run the checks CONTRIBUTING.md lists ("Build and test") before every
 pull request: `varyk check`, `varyk test`, the demo's `varyk test` in
 `demo/users`, rustfmt on the `.rs` files, and clippy on the crate
-`varyk publish --assemble-only` writes. Until varyk 0.7 is on
-crates.io, the compiler comes from varyk's `main` with
-`VARYK_STD_PATH` set to the same checkout's `crates/varyk-std`, and
-clippy is given that path as a `--config` patch. CI's `test` and
+`varyk publish --assemble-only` writes, with varyk 0.7 from crates.io.
+CI's `test` and
 `msrv` jobs are required checks: keep those job names, and keep the
 code building on Rust 1.85 (no let-chains).
 

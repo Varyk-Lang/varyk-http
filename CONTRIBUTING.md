@@ -7,8 +7,7 @@ requests are the easiest to review. The project has one maintainer, so
 reviews are best effort and a pull request may wait a while; a reminder
 after two weeks is welcome.
 
-The package is not released yet: its first release, 0.1.0, follows
-varyk 0.7 and varyk-sql 0.2. The compiler side of the design is Varyk's
+The compiler side of the design is Varyk's
 [5b4 spec](https://github.com/Varyk-Lang/varyk/blob/main/docs/specs/2026-10-05-milestone-5b4-design.md),
 whose section 6 is the contract this package implements; the package
 side is in `docs/specs/` here. A change to what the package offers
@@ -18,19 +17,9 @@ starts as an issue, here or in Varyk's
 ## Build and test
 
 You need a stable Rust toolchain through [rustup](https://rustup.rs), a
-C compiler (the demo's SQLite is built from C), and `varyk`. Until
-varyk 0.7 is on crates.io, install the compiler from a clone of its
-`main` and point `VARYK_STD_PATH` at the same clone's
-`crates/varyk-std`, so the two match, as CI does:
-
-```sh
-git clone https://github.com/Varyk-Lang/varyk ../varyk
-cargo install --path ../varyk/crates/varyk --locked
-export VARYK_STD_PATH="$PWD/../varyk/crates/varyk-std"
-```
-
-After the release, `cargo install varyk --version '^0.7' --locked`
-does, with no `VARYK_STD_PATH`. The package is a Varyk package
+C compiler (the demo's SQLite is built from C), and `varyk` (`cargo
+install varyk --version '^0.7' --locked`, the latest 0.7 release, as CI
+uses). The package is a Varyk package
 (`src/lib.vr`), so it is built only by `varyk`; plain `cargo build`
 does not work here. Before opening a pull request, run the same checks
 CI runs:
@@ -41,17 +30,20 @@ varyk test
 (cd demo/users && varyk test)
 rustfmt --edition 2024 --check src/*.rs
 cd "$(varyk publish --assemble-only)"
-cargo clippy --all-targets --config "patch.crates-io.varyk-std.path='$VARYK_STD_PATH'" -- -D warnings
+cargo clippy --all-targets -- -D warnings
 ```
 
 `varyk publish --assemble-only` writes the plain Rust crate the package
-publishes as, and prints its folder; clippy runs there. That crate's
-manifest is not patched, so until varyk 0.7 is on crates.io clippy is
-given the same `varyk-std` as the compiler; after it, the `--config`
-goes. `.github/workflows/ci.yml` has the exact steps.
+publishes as, and prints its folder; clippy runs there.
+`.github/workflows/ci.yml` has the exact steps.
 
 The minimum supported Rust version is 1.85 and CI checks it: no
 let-chains or other later features.
+
+Every Monday, and on demand from the Actions tab, the "Latest varyk"
+workflow builds and tests varyk-http with the newest varyk on crates.io,
+moving `varyk-std` to its version for that run. It is not a required
+check; a red run means a new varyk needs a varyk-http release.
 
 ## Where things are
 
@@ -85,9 +77,9 @@ let-chains or other later features.
 - `demo/users` is the users API of the README's first service, on
   `varyk-sql` and SQLite, with its tests in `src/tests.vr` through
   `app.request`; CI runs its `varyk test`. It depends on this package
-  by path and on `varyk-sql` by version: 0.1 while the compiler comes
-  from varyk's `main`, moved to the `varyk-sql` release for the new
-  varyk in the change that moves the package to it. release-please
+  by path and on `varyk-sql` by version, the `varyk-sql` release for
+  the same varyk; a change that moves the package to a new varyk moves
+  the demo's `varyk-std` and `varyk-sql` lines with it. release-please
   does not touch the demo's manifest.
 - `docs/specs/` holds the package's design, and `docs/plans/` the plan
   it was built from; read the spec, and the compiler's 5b4 spec, before

@@ -585,11 +585,8 @@ router from the settings if it grows past what one file holds clearly.
   `categories = ["web-programming::http-server",
   "web-programming::http-client"]`; `[lib] path = "src/lib.vr"`;
 - `[dependencies]`, default features off wherever the crate has them:
-  `varyk-std` with a minor-version requirement: `0.6`, the version
-  `Varyk-Lang/varyk`'s `main` carries, while the compiler is installed
-  from `main` (section 7), raised to `0.7` in the change that installs
-  varyk 0.7 from crates.io; `axum` 0.8.9 with `tokio`,
-  `http1`, and `ws`; `hyper` with `http1` and `server` and
+  `varyk-std` with a minor-version requirement, `0.7`; `axum` 0.8.9
+  with `tokio`, `http1`, and `ws`; `hyper` with `http1` and `server` and
   `hyper-util` with `tokio` and `service`, the versions axum brings, for
   `serve`'s connections (section 6.4); `tower-http`
   with `catch-panic`, `cors`,
@@ -810,18 +807,10 @@ process.
   branch ruleset requires: `varyk check`, `varyk test`, `rustfmt --check`
   on `src/*.rs`, `cargo clippy --all-targets -- -D warnings` in the crate `varyk publish
   --assemble-only` writes, and the demo's `varyk test`; `msrv` runs the
-  check and the tests. Until varyk 0.7 is on crates.io, both jobs install
-  the compiler from `Varyk-Lang/varyk`'s `main` with `VARYK_STD_PATH` set
-  to its `crates/varyk-std`, and clippy, which the assembled crate's own
-  manifest does not patch, is given `--config
-  "patch.crates-io.varyk-std.path='$VARYK_STD_PATH'"`; the package then requires `varyk-std` 0.6, the
-  version `main` carries (a patch applies only within the requirement),
-  and the demo uses the published `varyk-sql` 0.1, which requires the
-  same. At the release, one change installs varyk 0.7 from crates.io, drops
-  the clippy patch, adds the weekly "Latest varyk" job that `varyk-sql`
-  has,
-  raises the package's requirement to 0.7, and moves the demo to
-  `varyk-sql` 0.2.
+  check and the tests. Both install varyk 0.7 from crates.io, and the
+  demo uses the published `varyk-sql` 0.2, the release for the same
+  varyk. A weekly "Latest varyk" job, as `varyk-sql` has, tries the
+  newest varyk on crates.io, so a red run says a release is due.
 - No `unwrap`, `expect`, or other crash-on-absence call in the facade.
 - CONTRIBUTING.md's "Where things are" says most tests send requests
   through `app.request` and the event-stream, client, and in-flight

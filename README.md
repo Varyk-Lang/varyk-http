@@ -6,13 +6,9 @@ client for Varyk services, on [axum](https://github.com/tokio-rs/axum),
 [tower-http](https://github.com/tower-rs/tower-http), and
 [reqwest](https://github.com/seanmonstar/reqwest).
 
-varyk-http is not released yet. Its first release, 0.1.0, goes to
-crates.io after varyk 0.7 and varyk-sql 0.2, and works with varyk 0.7
-(see [Versions](#versions)). Until then, a program can use a clone of
-this repository with `varyk add varyk-http --rename http --path
-../varyk-http` and the compiler installed from varyk's `main`, as
-[CONTRIBUTING.md](CONTRIBUTING.md) describes. Varyk is experimental and
-pre-1.0: anything here may change.
+varyk-http 0.1.0 is on [crates.io](https://crates.io/crates/varyk-http)
+and works with varyk 0.7 (see [Versions](#versions)). Varyk is
+experimental and pre-1.0: anything here may change.
 
 The package covers what an ordinary production API needs and nothing
 more: routes the compiler checks, hooks, safe defaults, errors that
