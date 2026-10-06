@@ -187,7 +187,7 @@ Called on the app before `serve`:
 | `app.set_timeout(ms)` | 30 000 | a request that takes longer is a 503 |
 | `app.set_shutdown_grace(ms)` | 30 000 | on SIGTERM or ctrl-c, how long requests in flight have to finish |
 | `app.set_idle_timeout(ms)` | 75 000 | how long a connection may wait for a request's headers, idle between kept-alive requests or still sending them, before it is closed (see [Production](#production)) |
-| `app.set_max_in_flight(n)` | none | beyond `n` requests at once, a 503 `{"error": "server busy"}` |
+| `app.set_max_in_flight(n)` | none | beyond `n` requests at once, a 503 `{"error":"server busy"}` |
 | `app.allow_origin(origin)` | none | adds one CORS origin; `"*"` allows any |
 | `app.compress()` | off | gzip for responses whose client accepts it |
 | `app.metrics(path)` | off | Prometheus text at `path` (see [Metrics](#metrics)) |
@@ -260,7 +260,7 @@ async fn asset(name: string) -> http::Response {
 
 with `app.get("/assets/{name}", asset);`. A name that is absolute, has
 an empty, `.`, or `..` part, has a part starting with `.`, or leads
-outside the folder through a link is a 404 `{"error": "not found"}`,
+outside the folder through a link is a 404 `{"error":"not found"}`,
 as a missing file is, so a client cannot tell them apart. Every file
 response carries `x-content-type-options: nosniff`, so a browser keeps
 to the content type the extension gives (`html`, `css`, `js`, `txt`,
@@ -279,10 +279,10 @@ to the content type the extension gives (`html`, `css`, `js`, `txt`,
 | `http::error(status, text)` | `status` |
 
 An `Err` from a handler or a `before` hook with a status from 400 to
-599 is sent with that status and `{"error": "<text>"}`: its text is
+599 is sent with that status and `{"error":"<text>"}`: its text is
 written for the client. Any other error, one passed on with `?` from a
 database call, say, or one with a status outside 400 to 599, is a 500
-with the fixed body `{"error": "internal error"}`, and its message is
+with the fixed body `{"error":"internal error"}`, and its message is
 logged with the method and path. A panic in a handler or a hook is the
 same fixed 500. So a database message, a file path, or a secret inside
 an error stays in the log.
@@ -308,7 +308,7 @@ or starts with `/admin/` (not `/administrators`), and `app.after(f)` on
 every response the router makes. Each hook covers every route, wherever
 its line is, and hooks run in the order they were added. A `before`
 hook gives `Ok(true)` to let the request through, `Ok(false)` for a 403
-`{"error": "forbidden"}`, or an `Err`, sent as above. Because
+`{"error":"forbidden"}`, or an `Err`, sent as above. Because
 `before_on` tests the route the request matched, no spelling of a path
 reaches an `/admin` route without its hook.
 
