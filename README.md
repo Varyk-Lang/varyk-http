@@ -151,12 +151,12 @@ API_KEY=dev-key
 `varyk run` serves on `127.0.0.1:3000`:
 
 ```sh
-curl -i -H 'x-api-key: dev-key' -d '{"name":"Ada"}' localhost:3000/users
+curl -i -H 'x-api-key: dev-key' -d '{"name":"Ada"}' 127.0.0.1:3000/users
 # 201, location: /users/1, {"id":1,"name":"Ada"}
-curl -H 'x-api-key: dev-key' localhost:3000/users/1   # {"id":1,"name":"Ada"}
-curl -H 'x-api-key: dev-key' localhost:3000/users/2   # 404 {"error":"not found"}
-curl localhost:3000/users                             # 401
-curl localhost:3000/health                            # "ok"
+curl -H 'x-api-key: dev-key' 127.0.0.1:3000/users/1   # {"id":1,"name":"Ada"}
+curl -H 'x-api-key: dev-key' 127.0.0.1:3000/users/2   # 404 {"error":"not found"}
+curl 127.0.0.1:3000/users                             # 401
+curl 127.0.0.1:3000/health                            # "ok"
 ```
 
 The same program, with its tests, is in [`demo/users`](demo/users).
@@ -546,11 +546,20 @@ EXPOSE 3000
 CMD ["./users"]
 ```
 
-A `.dockerignore` beside it keeps `target` and `.env` out of the build;
+`COPY . .` sends the whole folder to the build, so a `.dockerignore`
+beside the `Dockerfile` keeps the host's build output and secrets out
+of it:
+
+```text
+target
+.env
+```
+
 `DATABASE_URL` and `API_KEY` are set by the orchestrator. On SIGTERM
 the service stops accepting and gives requests in flight the shutdown
-grace, which a second signal ends at once; an open event stream holds the shutdown until the grace ends,
-and a WebSocket ends with the process.
+grace, which a second signal ends at once; an open event stream holds
+the shutdown until the grace ends, and a WebSocket ends with the
+process.
 
 **Idle connections.** The service closes a connection that has sent no
 request for the idle timeout, 75 seconds unless `set_idle_timeout`
