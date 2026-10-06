@@ -1,0 +1,6 @@
+// A handler in a module of its own, so a route can name a function of
+// another module of the package.
+
+pub async fn shout(word: string) -> string {
+    word.to_uppercase()
+}

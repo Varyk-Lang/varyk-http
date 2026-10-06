@@ -1,0 +1,14 @@
+[package]
+name = "users"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "users"
+path = "src/main.vr"
+
+[dependencies]
+varyk-std = "0.6"
+http = { package = "varyk-http", path = "../.." }
+sql = { version = "0.1", package = "varyk-sql" }

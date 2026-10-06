@@ -1,0 +1,117 @@
+// The users API through `app.request`, on an in-memory database of its
+// own per test, with no port.
+
+async fn test_app() -> Result<http::App, Error> {
+    let db = sql::connect_with("sqlite::memory:", 1).await?;
+    db.migrate("migrations").await?;
+    Ok(crate::build_app(Shared::new(crate::State { db: db, api_key: "test-key" })))
+}
+
+fn with_key(method: string, path: string) -> http::Request {
+    let mut req = http::Request::new(method, path);
+    req.set_header("x-api-key", "test-key");
+    req
+}
+
+fn new_user(name: string) -> http::Request {
+    let mut req = with_key("POST", "/users");
+    req.set_body(format!("{{\"name\":\"{}\"}}", name));
+    req
+}
+
+#[test]
+async fn users_are_created_listed_read_and_deleted() {
+    let app = match test_app().await {
+        Ok(app) => app,
+        Err(e) => {
+            assert_eq(e.message(), "no error");
+            return;
+        }
+    };
+    let r = app.request(new_user("Ada")).await;
+    assert_eq(r.status(), 201);
+    assert_eq(r.header("location"), Some("/users/1"));
+    assert_eq(r.body(), "{\"id\":1,\"name\":\"Ada\"}");
+    assert_eq(app.request(new_user("Bo")).await.status(), 201);
+
+    let r = app.request(with_key("GET", "/users")).await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.body(), "[{\"id\":1,\"name\":\"Ada\"},{\"id\":2,\"name\":\"Bo\"}]");
+
+    let r = app.request(with_key("GET", "/users/2")).await;
+    assert_eq(r.status(), 200);
+    let user: Result<crate::User, Error> = r.read_json();
+    match user {
+        Ok(u) => assert_eq(u.name, "Bo"),
+        Err(e) => assert_eq(e.message(), "no error"),
+    }
+
+    assert_eq(app.request(with_key("DELETE", "/users/1")).await.status(), 204);
+    let r = app.request(with_key("GET", "/users/1")).await;
+    assert_eq(r.status(), 404);
+    assert_eq(r.body(), "{\"error\":\"not found\"}");
+    let r = app.request(with_key("DELETE", "/users/1")).await;
+    assert_eq(r.status(), 404);
+    assert_eq(r.body(), "{\"error\":\"no such user\"}");
+}
+
+#[test]
+async fn a_user_without_a_name_is_a_400() {
+    let app = match test_app().await {
+        Ok(app) => app,
+        Err(e) => {
+            assert_eq(e.message(), "no error");
+            return;
+        }
+    };
+    let r = app.request(new_user("")).await;
+    assert_eq(r.status(), 400);
+    assert_eq(r.body(), "{\"error\":\"a user needs a name\"}");
+}
+
+#[test]
+async fn the_users_routes_need_the_key() {
+    let app = match test_app().await {
+        Ok(app) => app,
+        Err(e) => {
+            assert_eq(e.message(), "no error");
+            return;
+        }
+    };
+    let r = app.request(http::Request::new("GET", "/users")).await;
+    assert_eq(r.status(), 401);
+    assert_eq(r.body(), "{\"error\":\"an x-api-key header is needed\"}");
+    let mut req = http::Request::new("DELETE", "/users/1");
+    req.set_header("x-api-key", "wrong");
+    let r = app.request(req).await;
+    assert_eq(r.status(), 403);
+    assert_eq(r.body(), "{\"error\":\"forbidden\"}");
+}
+
+#[test]
+async fn health_answers_without_the_key() {
+    let app = match test_app().await {
+        Ok(app) => app,
+        Err(e) => {
+            assert_eq(e.message(), "no error");
+            return;
+        }
+    };
+    let r = app.request(http::Request::new("GET", "/health")).await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.body(), "\"ok\"");
+}
+
+#[test]
+async fn a_path_no_route_matches_is_a_404() {
+    let app = match test_app().await {
+        Ok(app) => app,
+        Err(e) => {
+            assert_eq(e.message(), "no error");
+            return;
+        }
+    };
+    let r = app.request(http::Request::new("GET", "/nowhere")).await;
+    assert_eq(r.status(), 404);
+    assert_eq(r.body(), "{\"error\":\"not found\"}");
+}

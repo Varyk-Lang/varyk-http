@@ -1,0 +1,99 @@
+// The users API of the README: list, get, create, and delete users in a
+// database, behind an API key, with a health check open to the platform.
+
+mod tests;
+
+struct Config {
+    database_url: string,
+    api_key: string,
+    #[default(3000)]
+    port: u16,
+    #[default("127.0.0.1")]
+    address: string,
+}
+
+struct User {
+    id: i64,
+    name: string,
+}
+
+struct NewUser {
+    name: string,
+}
+
+struct State {
+    db: sql::Pool,
+    api_key: string,
+}
+
+async fn list_users(state: Shared<State>) -> Result<Vec<User>, Error> {
+    state.db.all("select id, name from users order by id").await
+}
+
+async fn get_user(id: i64, state: Shared<State>) -> Result<Option<User>, Error> {
+    state.db.first("select id, name from users where id = ?", id).await
+}
+
+async fn create_user(user: NewUser, state: Shared<State>) -> Result<http::Response, Error> {
+    if user.name.is_empty() {
+        return Err(http::bad_request("a user needs a name"));
+    }
+    let id: i64 = state.db.one("insert into users (name) values (?) returning id", user.name).await?;
+    let mut r = http::Response::json(User { id: id, name: user.name.clone() });
+    r.set_status(201);
+    r.set_header("location", format!("/users/{}", id));
+    Ok(r)
+}
+
+async fn delete_user(id: i64, state: Shared<State>) -> Result<http::Response, Error> {
+    let deleted = state.db.run("delete from users where id = ?", id).await?;
+    if deleted == 0 {
+        return Err(http::not_found("no such user"));
+    }
+    Ok(http::Response::empty())
+}
+
+async fn health(state: Shared<State>) -> Result<string, Error> {
+    let _ok = state.db.run("select 1").await?;
+    Ok("ok")
+}
+
+// Runs before every route under `/users`: a request without the key is a
+// 401, one with another key a 403.
+async fn check_key(req: http::Request, state: Shared<State>) -> Result<bool, Error> {
+    match req.header("x-api-key") {
+        Some(key) => Ok(key == state.api_key),
+        None => Err(http::unauthorized("an x-api-key header is needed")),
+    }
+}
+
+async fn open_db(url: string) -> Result<sql::Pool, Error> {
+    let db = sql::connect(url).await?;
+    db.migrate("migrations").await?;
+    Ok(db)
+}
+
+fn build_app(state: Shared<State>) -> http::App {
+    let mut app = http::App::new(state.clone());
+    app.get("/health", health);
+    app.get("/users", list_users);
+    app.get("/users/{id}", get_user);
+    app.post("/users", create_user);
+    app.delete("/users/{id}", delete_user);
+    app.before_on("/users", check_key);
+    app
+}
+
+async fn start() -> Result<bool, Error> {
+    let config: Config = env::parse()?;
+    let db = open_db(config.database_url).await?;
+    let mut app = build_app(Shared::new(State { db: db, api_key: config.api_key.clone() }));
+    app.set_address(config.address);
+    app.serve(config.port).await
+}
+
+async fn main() {
+    if let Err(e) = start().await {
+        log::error("{}", e);
+    }
+}

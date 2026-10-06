@@ -1,0 +1,46 @@
+[package]
+name = "varyk-http"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+authors = ["Vlad Mickevic"]
+description = "The HTTP package for Varyk, a language for backend services that compiles to Rust: a server on axum and tower-http, and a client on reqwest"
+repository = "https://github.com/Varyk-Lang/varyk-http"
+homepage = "https://varyk.com"
+keywords = ["varyk", "http", "server", "client", "axum"]
+categories = ["web-programming::http-server", "web-programming::http-client"]
+
+[lib]
+path = "src/lib.vr"
+
+# JSON, serde, and tracing come through varyk-std, so they always agree
+# with the program's own `json::` and `log::` calls.
+[dependencies]
+varyk-std = "0.6"
+axum = { version = "0.8.9", default-features = false, features = ["tokio", "http1", "ws"] }
+tower-http = { version = "0.6", default-features = false, features = ["catch-panic", "cors", "compression-gzip"] }
+tokio = { version = "1", default-features = false, features = ["net", "rt", "signal", "fs", "io-util", "sync", "time"] }
+tower = { version = "0.5", default-features = false, features = ["limit", "load-shed", "util"] }
+futures-util = { version = "0.3", default-features = false }
+# The server's connections, as axum serves them but with a header-read
+# timeout: the versions axum already brings.
+hyper = { version = "1.11", default-features = false, features = ["http1", "server"] }
+hyper-util = { version = "0.1.21", default-features = false, features = ["tokio", "service"] }
+# The version axum uses, so the conflict check agrees with axum's router.
+matchit = "=0.8.4"
+multer = { version = "3", default-features = false }
+form_urlencoded = { version = "1", default-features = false, features = ["alloc"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+metrics = { version = "0.24", default-features = false }
+metrics-exporter-prometheus = { version = "0.17", default-features = false }
+# The client of the WebSocket test in `src/live.rs`, and the error type
+# `WebSocket::recv` downcasts axum's errors to, to tell a message over the
+# limit (1009) or a malformed one (1002, 1007) from a failure. It must be
+# the version axum uses, or the downcast fails and each of those becomes
+# an `Err`: axum 0.8.9 is the first on tokio-tungstenite 0.29, hence its
+# requirement above, and an axum release that moves to another
+# tokio-tungstenite needs a varyk-http release moving this line with it
+# (the 1009 and 1007 tests in `src/live.rs` catch it). Under
+# [dependencies], since a `.rs` file may not use a dev-dependency.
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "handshake"] }

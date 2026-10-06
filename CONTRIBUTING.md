@@ -7,57 +7,91 @@ requests are the easiest to review. The project has one maintainer, so
 reviews are best effort and a pull request may wait a while; a reminder
 after two weeks is welcome.
 
-The package is not released yet: milestone 5b4 of Varyk's
-[roadmap](https://github.com/Varyk-Lang/varyk/blob/main/docs/roadmap.md)
-is the brief. The compiler side of the design is Varyk's
+The package is not released yet: its first release, 0.1.0, follows
+varyk 0.7 and varyk-sql 0.2. The compiler side of the design is Varyk's
 [5b4 spec](https://github.com/Varyk-Lang/varyk/blob/main/docs/specs/2026-10-05-milestone-5b4-design.md),
 whose section 6 is the contract this package implements; the package
-side goes in `docs/specs/` here, written before the code. Until the
-code lands, the most useful contribution is a comment on that design,
-as an issue here or in Varyk's
+side is in `docs/specs/` here. A change to what the package offers
+starts as an issue, here or in Varyk's
 [Discussions](https://github.com/Varyk-Lang/varyk/discussions).
 
 ## Build and test
 
-You need a stable Rust toolchain through [rustup](https://rustup.rs) and
-`varyk` (`cargo install varyk --locked`). The package is a Varyk package
-(`src/lib.vr`), so it is built only by `varyk`; plain `cargo build` does
-not work here. Before opening a pull request, run the same checks CI
-runs:
+You need a stable Rust toolchain through [rustup](https://rustup.rs), a
+C compiler (the demo's SQLite is built from C), and `varyk`. Until
+varyk 0.7 is on crates.io, install the compiler from a clone of its
+`main` and point `VARYK_STD_PATH` at the same clone's
+`crates/varyk-std`, so the two match, as CI does:
+
+```sh
+git clone https://github.com/Varyk-Lang/varyk ../varyk
+cargo install --path ../varyk/crates/varyk --locked
+export VARYK_STD_PATH="$PWD/../varyk/crates/varyk-std"
+```
+
+After the release, `cargo install varyk --version '^0.7' --locked`
+does, with no `VARYK_STD_PATH`. The package is a Varyk package
+(`src/lib.vr`), so it is built only by `varyk`; plain `cargo build`
+does not work here. Before opening a pull request, run the same checks
+CI runs:
 
 ```sh
 varyk check
 varyk test
+(cd demo/users && varyk test)
 rustfmt --edition 2024 --check src/*.rs
 cd "$(varyk publish --assemble-only)"
-cargo clippy --all-targets -- -D warnings
+cargo clippy --all-targets --config "patch.crates-io.varyk-std.path='$VARYK_STD_PATH'" -- -D warnings
 ```
 
 `varyk publish --assemble-only` writes the plain Rust crate the package
-publishes as, and prints its folder; clippy runs there. Once there is
-code, `.github/workflows/ci.yml` has the exact steps and the varyk
-version CI installs; it arrives with the code, and until then the `test`
-and `msrv` checks that `main` requires have nothing to run.
+publishes as, and prints its folder; clippy runs there. That crate's
+manifest is not patched, so until varyk 0.7 is on crates.io clippy is
+given the same `varyk-std` as the compiler; after it, the `--config`
+goes. `.github/workflows/ci.yml` has the exact steps.
 
 The minimum supported Rust version is 1.85 and CI checks it: no
 let-chains or other later features.
 
 ## Where things are
 
-- `src/lib.vr` is everything a program sees; the `.rs` files beside it,
-  the facade over axum, tower-http, and reqwest, are the only Rust. They
+- `src/lib.vr` is everything a program sees: the `pub use` list and the
+  error constructors, in Varyk. The `.rs` files beside it are the facade
+  over axum, tower-http, and reqwest, and the only Rust: `server.rs`
+  (`App`, its settings, the router, `serve`, `request`, the route
+  wrapper, the hooks), `message.rs` (`Request`, `Response`, cookies,
+  files, the `respond_*` functions), `live.rs` (`WebSocket`, `Sse`,
+  `Multipart`, `Part`), `client.rs` (`Client`), and `metrics.rs`. They
   never panic: no `unwrap`, `expect`, or indexing that can fail, and
   every failure becomes a `varyk_std::Error`. An error without a status
   is a 500 whose message is logged and not sent, so no internal failure
   reaches a client. The items the compiler's generated Rust calls
   (section 6 of the 5b4 spec) change only with a varyk release.
-- `src/tests.vr` holds the tests, as a module: a Varyk package may not
-  have a `tests/`, `examples/`, or `benches/` directory. They send
-  requests through `app.request`, so no test binds a port.
-- `demo/users` is the users API on `varyk-sql`, the program the README's
-  fifteen-minute path ends at; CI builds and runs it.
-- `docs/specs/` holds the package's design; read it, and the compiler's
-  5b4 spec, before changing what the package offers.
+- `src/tests.vr` holds the tests (the Rust tests, for what a Varyk
+  program cannot reach, are in the facade's `#[cfg(test)]` modules,
+  which `varyk test` also runs: a WebSocket conversation with
+  tokio-tungstenite as the client in `src/live.rs`, the logged path in
+  `src/message.rs`, and the idle timeout in `src/server.rs`),
+  as a module: a Varyk package may not have a `tests/`, `examples/`, or
+  `benches/` directory. Its own module `src/tests/handlers.vr` holds a
+  handler of another module, for a route that names one. Most send
+  requests through `app.request`, with no port; the event-stream,
+  client, in-flight, WebSocket, and idle-timeout tests serve on a fixed loopback port,
+  from 41801 up, one port per test, so tests running at once never
+  share one. The file tests serve from `testdata/` (a text file, and a
+  link pointing out of the folder that must stay refused), and the
+  upload tests write under the git-ignored `target/`, so run `varyk
+  test` from the package's folder, as CI does.
+- `demo/users` is the users API of the README's first service, on
+  `varyk-sql` and SQLite, with its tests in `src/tests.vr` through
+  `app.request`; CI runs its `varyk test`. It depends on this package
+  by path and on `varyk-sql` by version: 0.1 while the compiler comes
+  from varyk's `main`, moved to the `varyk-sql` release for the new
+  varyk in the change that moves the package to it. release-please
+  does not touch the demo's manifest.
+- `docs/specs/` holds the package's design, and `docs/plans/` the plan
+  it was built from; read the spec, and the compiler's 5b4 spec, before
+  changing what the package offers.
 
 Rust code follows Varyk's
 [AGENTS.md](https://github.com/Varyk-Lang/varyk/blob/main/AGENTS.md):

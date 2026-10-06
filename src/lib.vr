@@ -1,0 +1,55 @@
+// varyk-http: the HTTP package for Varyk. Everything a program names is
+// reached from here; the `.rs` files beside this one are the facade over
+// axum, tower-http, and reqwest.
+
+pub mod server;
+pub mod message;
+pub mod live;
+pub mod client;
+mod metrics;
+mod tests;
+
+pub use server::App;
+pub use message::Request;
+pub use message::Response;
+pub use client::Client;
+pub use live::WebSocket;
+pub use live::Sse;
+pub use live::Multipart;
+pub use server::route;
+pub use server::before_hook;
+pub use server::after_hook;
+pub use message::respond_empty;
+pub use message::respond_json;
+pub use message::respond_option;
+pub use message::respond_error;
+pub use message::respond_before;
+
+// Errors whose message is written for the client (spec 2.4): a handler
+// or a `before` hook that gives one sends its status with `{"error":
+// message}`. An error with no status, or with one outside 400 to 599, is
+// a 500 whose message is logged and never sent.
+
+pub fn bad_request(text: string) -> Error {
+    Error::with_status(400, text.clone())
+}
+
+pub fn unauthorized(text: string) -> Error {
+    Error::with_status(401, text.clone())
+}
+
+pub fn forbidden(text: string) -> Error {
+    Error::with_status(403, text.clone())
+}
+
+pub fn not_found(text: string) -> Error {
+    Error::with_status(404, text.clone())
+}
+
+pub fn conflict(text: string) -> Error {
+    Error::with_status(409, text.clone())
+}
+
+pub fn error(status: u16, text: string) -> Error {
+    Error::with_status(status, text.clone())
+}
