@@ -214,6 +214,21 @@ async fn bad_cookie() -> crate::Response {
     r
 }
 
+async fn by_id(id: Uuid) -> string {
+    format!("{}", id)
+}
+
+async fn at(when: Time) -> string {
+    when.to_iso()
+}
+
+async fn since(since: Option<Time>) -> string {
+    match since {
+        Some(t) => t.to_iso(),
+        None => "always",
+    }
+}
+
 fn build_app() -> crate::App {
     let mut app = crate::App::new(Shared::new(Config { word: "hello" }));
     app.get("/double/{id}", double);
@@ -239,6 +254,9 @@ fn build_app() -> crate::App {
     app.get("/cookies", cookies);
     app.get("/bad-cookie", bad_cookie);
     app.get("/shout/{word}", handlers::shout);
+    app.get("/ids/{id}", by_id);
+    app.get("/at/{when}", at);
+    app.get("/since", since);
     app
 }
 
@@ -291,6 +309,65 @@ async fn a_query_parameter_that_does_not_parse_is_a_400() {
     let r = get(app, "/search?limit=many").await;
     assert_eq(r.status(), 400);
     assert_eq(r.body(), "{\"error\":\"the query parameter `limit` cannot be read from `many`\"}");
+}
+
+// A `Uuid` or `Time` parameter reads through its `FromStr` (spec 2):
+// hex in either case, written lower-case; a time with an offset in UTC.
+
+#[test]
+async fn a_uuid_path_parameter_binds_and_is_written_lower_case() {
+    let app = build_app();
+    let r = get(app, "/ids/0192F4A2-3B4C-7D8E-9F01-23456789ABCD").await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.body(), "\"0192f4a2-3b4c-7d8e-9f01-23456789abcd\"");
+}
+
+#[test]
+async fn a_uuid_path_parameter_that_does_not_parse_is_a_400() {
+    let app = build_app();
+    let r = get(app, "/ids/abc").await;
+    assert_eq(r.status(), 400);
+    assert_eq(r.body(), "{\"error\":\"the path parameter `id` cannot be read from `abc`\"}");
+}
+
+#[test]
+async fn a_time_path_parameter_with_an_offset_reads_in_utc() {
+    let app = build_app();
+    let r = get(app, "/at/2026-10-07T12:00:00+02:00").await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.body(), "\"2026-10-07T10:00:00Z\"");
+}
+
+#[test]
+async fn an_optional_time_query_parameter_binds() {
+    let app = build_app();
+    let r = get(app, "/since?since=2026-10-07T12:00:00Z").await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.body(), "\"2026-10-07T12:00:00Z\"");
+    let r = get(app, "/since").await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.body(), "\"always\"");
+}
+
+#[test]
+async fn a_time_query_parameter_that_does_not_parse_is_a_400() {
+    let app = build_app();
+    let r = get(app, "/since?since=yesterday").await;
+    assert_eq(r.status(), 400);
+    assert_eq(r.body(), "{\"error\":\"the query parameter `since` cannot be read from `yesterday`\"}");
+}
+
+// In a query, `+` is a space by form encoding: an offset is written
+// `%2B`, and a raw `+` is the 400 naming the decoded text.
+#[test]
+async fn a_time_query_parameter_takes_an_encoded_plus() {
+    let app = build_app();
+    let r = get(app, "/since?since=2026-10-07T12:00:00%2B02:00").await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.body(), "\"2026-10-07T10:00:00Z\"");
+    let r = get(app, "/since?since=2026-10-07T12:00:00+02:00").await;
+    assert_eq(r.status(), 400);
+    assert_eq(r.body(), "{\"error\":\"the query parameter `since` cannot be read from `2026-10-07T12:00:00 02:00`\"}");
 }
 
 #[test]
@@ -648,6 +725,123 @@ fn each_response_constructor_gives_its_status() {
     r.set_header("X-Tag", "a");
     r.set_header("x-tag", "b");
     assert_eq(r.header("X-TAG"), Some("b"));
+}
+
+// Bodies as bytes (0.2 spec 3): a body goes in and out as it is, with no
+// UTF-8 check; the text calls keep reading it as text.
+
+// The bytes of a base64 literal, for bytes a string cannot hold.
+fn raw(text: string) -> Bytes {
+    match Bytes::from_base64(text) {
+        Ok(b) => b,
+        Err(e) => Bytes::from_text(e.message()),
+    }
+}
+
+async fn echo_bytes(req: crate::Request) -> crate::Response {
+    crate::Response::bytes(req.body_bytes(), "application/octet-stream")
+}
+
+async fn body_size(req: crate::Request) -> usize {
+    req.body_bytes().len()
+}
+
+async fn png() -> crate::Response {
+    crate::Response::bytes(raw("iVBORw0KGgo="), "image/png")
+}
+
+async fn split_type() -> crate::Response {
+    crate::Response::bytes(raw("iVBORw0KGgo="), format!("image/png{}x-evil: 1", crlf()))
+}
+
+async fn bytes_as_json() -> crate::Response {
+    crate::Response::json(raw("/wABAoD+"))
+}
+
+async fn bytes_returned() -> Bytes {
+    raw("/wABAoD+")
+}
+
+fn bytes_app() -> crate::App {
+    let mut app = crate::App::new(Shared::new(Config { word: "hello" }));
+    app.post("/echo", echo_bytes);
+    app.post("/size", body_size);
+    app.get("/png", png);
+    app.get("/split", split_type);
+    app.get("/as-json", bytes_as_json);
+    app.get("/returned", bytes_returned);
+    app
+}
+
+#[test]
+async fn bytes_that_are_not_utf8_go_through_a_handler_as_they_are() {
+    let app = bytes_app();
+    // ff 00 01 02 80 fe
+    let sent = raw("/wABAoD+");
+    let mut req = crate::Request::new("POST", "/echo");
+    req.set_body_bytes(sent);
+    assert_eq(req.body_bytes(), sent);
+    assert_eq(req.body(), "");
+    let r = app.request(req).await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.body_bytes(), sent);
+    assert_eq(r.header("content-type"), Some("application/octet-stream"));
+    assert_eq(r.body(), "");
+}
+
+#[test]
+async fn a_bytes_response_is_a_200_with_its_content_type_kept_to() {
+    let r = crate::Response::bytes(raw("iVBORw0KGgo="), "image/png");
+    assert_eq(r.status(), 200);
+    assert_eq(r.header("content-type"), Some("image/png"));
+    assert_eq(r.header("x-content-type-options"), Some("nosniff"));
+    assert_eq(r.body_bytes(), raw("iVBORw0KGgo="));
+    let r = get(bytes_app(), "/png").await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.header("content-type"), Some("image/png"));
+    assert_eq(r.header("x-content-type-options"), Some("nosniff"));
+    assert_eq(r.body_bytes(), raw("iVBORw0KGgo="));
+}
+
+#[test]
+async fn a_content_type_with_a_line_break_is_the_fixed_500() {
+    let r = get(bytes_app(), "/split").await;
+    assert_eq(r.status(), 500);
+    assert_eq(r.body(), "{\"error\":\"internal error\"}");
+    assert_eq(r.header("content-type"), Some("application/json"));
+    assert_eq(r.header("x-evil"), None);
+}
+
+#[test]
+fn the_bytes_of_a_text_body_are_its_utf8() {
+    let r = crate::Response::text("héllo");
+    assert_eq(r.body_bytes(), Bytes::from_text("héllo"));
+    let mut req = crate::Request::new("POST", "/echo");
+    req.set_body("héllo");
+    assert_eq(req.body_bytes(), Bytes::from_text("héllo"));
+    let r = crate::Response::file("testdata", "hello.txt");
+    assert_eq(r.body_bytes(), Bytes::from_text("Hello from testdata.\n"));
+    assert(crate::Response::empty().body_bytes().is_empty());
+}
+
+#[test]
+async fn a_multipart_request_has_no_body_bytes() {
+    let app = bytes_app();
+    let r = app.request(form("/size", text_part("note", "hi"))).await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.body(), "0");
+}
+
+#[test]
+async fn bytes_in_json_are_a_base64_string() {
+    let app = bytes_app();
+    let r = get(app, "/as-json").await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.header("content-type"), Some("application/json"));
+    assert_eq(r.body(), "\"/wABAoD+\"");
+    let r = get(app, "/returned").await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.body(), "\"/wABAoD+\"");
 }
 
 // Hooks (spec 2.2): every hook covers every route whatever the order of
@@ -1307,6 +1501,47 @@ async fn quiet(form: crate::Multipart) -> string {
     }
 }
 
+// The first part as `bytes` reads it, with the type it declared
+// (0.2 spec 3).
+struct PartSeen {
+    content_type: Option<string>,
+    bytes: Bytes,
+}
+
+async fn first_part(form: crate::Multipart) -> Result<PartSeen, Error> {
+    let part = match form.next().await? {
+        Some(part) => part,
+        None => { return Err(crate::error(400, "no part")); }
+    };
+    let content_type = part.content_type();
+    let bytes = part.bytes().await?;
+    Ok(PartSeen { content_type: content_type, bytes: bytes })
+}
+
+async fn bytes_then_text(form: crate::Multipart) -> Result<string, Error> {
+    let part = match form.next().await? {
+        Some(part) => part,
+        None => { return Ok("no part"); }
+    };
+    let first = part.bytes().await?;
+    match part.text().await {
+        Ok(again) => Ok(format!("{} bytes, again {}", first.len(), again)),
+        Err(e) => Ok(format!("{} bytes, then: {}", first.len(), e.message())),
+    }
+}
+
+// `quiet`, reading the part as bytes.
+async fn quiet_bytes(form: crate::Multipart) -> string {
+    match form.next().await {
+        Ok(Some(part)) => match part.bytes().await {
+            Ok(b) => format!("{} bytes", b.len()),
+            Err(e) => e.message().clone(),
+        },
+        Ok(None) => "none",
+        Err(e) => e.message().clone(),
+    }
+}
+
 fn upload_app() -> crate::App {
     let mut app = crate::App::new(Shared::new(Config { word: "hello" }));
     app.post("/upload", upload);
@@ -1314,6 +1549,9 @@ fn upload_app() -> crate::App {
     app.post("/twice", read_twice);
     app.post("/two", hold_two);
     app.post("/quiet", quiet);
+    app.post("/first", first_part);
+    app.post("/bytes-then-text", bytes_then_text);
+    app.post("/quiet-bytes", quiet_bytes);
     app.get("/target", from_target);
     app.get("/here", from_here);
     app
@@ -1382,6 +1620,93 @@ async fn a_part_over_the_body_limit_is_a_413() {
     let r = app.request(form("/quiet", text_part("small", "fits"))).await;
     assert_eq(r.status(), 200);
     assert_eq(r.body(), "\"fits\"");
+}
+
+// A part's bytes and declared type (0.2 spec 3). Bytes that are not UTF-8
+// cannot be joined into a form, so the form is one base64 literal:
+//   --XyZ CRLF
+//   Content-Disposition: form-data; name="pic"; filename="a.png" CRLF
+//   Content-Type: image/png CRLF
+//   CRLF
+//   ff 00 80 CRLF
+//   --XyZ-- CRLF
+#[test]
+async fn a_part_that_is_not_utf8_is_read_as_bytes_with_its_declared_type() {
+    let app = upload_app();
+    let mut req = crate::Request::new("POST", "/first");
+    req.set_header("content-type", "multipart/form-data; boundary=XyZ");
+    req.set_body_bytes(raw("LS1YeVoNCkNvbnRlbnQtRGlzcG9zaXRpb246IGZvcm0tZGF0YTsgbmFtZT0icGljIjsgZmlsZW5hbWU9ImEucG5nIg0KQ29udGVudC1UeXBlOiBpbWFnZS9wbmcNCg0K/wCADQotLVh5Wi0tDQo="));
+    let r = app.request(req).await;
+    assert_eq(r.status(), 200);
+    let seen: Result<PartSeen, Error> = r.read_json();
+    match seen {
+        Ok(seen) => {
+            assert_eq(seen.content_type, Some("image/png"));
+            // ff 00 80
+            assert_eq(seen.bytes, raw("/wCA"));
+        }
+        Err(e) => assert_eq(e.message(), "no error"),
+    }
+}
+
+#[test]
+async fn a_part_with_no_declared_type_has_none() {
+    let app = upload_app();
+    let r = app.request(form("/first", text_part("title", "Hello"))).await;
+    assert_eq(r.status(), 200);
+    let seen: Result<PartSeen, Error> = r.read_json();
+    match seen {
+        Ok(seen) => {
+            assert_eq(seen.content_type, None);
+            assert_eq(seen.bytes, Bytes::from_text("Hello"));
+        }
+        Err(e) => assert_eq(e.message(), "no error"),
+    }
+}
+
+// A declared type multer cannot parse is still the client's word, given
+// whole (plan, Review Focus 3).
+#[test]
+async fn a_declared_type_that_does_not_parse_is_given_as_written() {
+    let app = upload_app();
+    let nl = crlf();
+    let part = format!("--XyZ{}Content-Disposition: form-data; name=\"doc\"; filename=\"a.bin\"{}Content-Type: not a type{}{}content{}", nl, nl, nl, nl, nl);
+    let r = app.request(form("/first", part)).await;
+    assert_eq(r.status(), 200);
+    let seen: Result<PartSeen, Error> = r.read_json();
+    match seen {
+        Ok(seen) => {
+            assert_eq(seen.content_type, Some("not a type"));
+            assert_eq(seen.bytes, Bytes::from_text("content"));
+        }
+        Err(e) => assert_eq(e.message(), "no error"),
+    }
+}
+
+#[test]
+async fn a_part_read_as_bytes_is_read_once() {
+    let app = upload_app();
+    let r = app.request(form("/bytes-then-text", text_part("title", "Hello"))).await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.body(), "\"5 bytes, then: the part \\\"title\\\" was read already\"");
+}
+
+#[test]
+async fn a_part_over_the_body_limit_read_as_bytes_is_a_413() {
+    let mut app = upload_app();
+    app.set_body_limit(200);
+    let mut long = "";
+    let mut i = 0;
+    while i < 30 {
+        long.push_str("0123456789");
+        i = i + 1;
+    }
+    let r = app.request(form("/quiet-bytes", file_part("big", "a.bin", long))).await;
+    assert_eq(r.status(), 413);
+    assert_eq(r.body(), "{\"error\":\"body too large\"}");
+    let r = app.request(form("/quiet-bytes", text_part("small", "fits"))).await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.body(), "\"4 bytes\"");
 }
 
 #[test]
@@ -1496,6 +1821,18 @@ async fn echo_socket(ws: crate::WebSocket) -> Result<crate::Response, Error> {
     Ok(crate::Response::empty())
 }
 
+// Each message echoed as it came (0.2 spec 3); the enum is reached
+// through its module, as a program writes `http::live::Message`.
+async fn message_socket(ws: crate::WebSocket) -> Result<crate::Response, Error> {
+    while let Some(message) = ws.recv_message().await? {
+        match message {
+            crate::live::Message::Text(text) => ws.send(text).await?,
+            crate::live::Message::Binary(b) => ws.send_bytes(b).await?,
+        };
+    }
+    Ok(crate::Response::empty())
+}
+
 async fn quiet_socket(ws: crate::WebSocket) {
     let sent = ws.send("only").await;
     if let Err(e) = sent {
@@ -1508,12 +1845,16 @@ async fn a_websocket_route_is_a_400_under_request() {
     let mut app = crate::App::new(Shared::new(Config { word: "hello" }));
     app.get("/socket", echo_socket);
     app.get("/quiet-socket", quiet_socket);
+    app.get("/message-socket", message_socket);
     let refused = "{\"error\":\"the request is not a WebSocket upgrade\"}";
     let r = get(app, "/socket").await;
     assert_eq(r.status(), 400);
     assert_eq(r.body(), refused);
     let r = get(app, "/quiet-socket").await;
     assert_eq(r.status(), 400);
+    let r = get(app, "/message-socket").await;
+    assert_eq(r.status(), 400);
+    assert_eq(r.body(), refused);
     let mut req = crate::Request::new("GET", "/socket");
     req.set_header("connection", "upgrade");
     req.set_header("upgrade", "websocket");
@@ -1567,6 +1908,15 @@ async fn chain(n: i64) -> crate::Response {
     redirect(format!("/chain/{}", n + 1))
 }
 
+// The body as it came, under the type it came with.
+async fn echo_typed(req: crate::Request) -> crate::Response {
+    let kind = match req.header("content-type") {
+        Some(kind) => kind,
+        None => "none",
+    };
+    crate::Response::bytes(req.body_bytes(), kind)
+}
+
 fn served_app() -> crate::App {
     let mut app = crate::App::new(Shared::new(Config { word: "hello" }));
     app.get("/hello", hello);
@@ -1581,6 +1931,9 @@ fn served_app() -> crate::App {
     app.get("/away-port", away_port);
     app.get("/chain/{n}", chain);
     app.get("/events", three_events);
+    app.post("/bytes", echo_typed);
+    app.put("/bytes", echo_typed);
+    app.get("/png", png);
     app
 }
 
@@ -1753,6 +2106,61 @@ async fn three_events_are_read_whole_by_the_client() {
     assert_eq(r.status(), 200);
     assert_eq(r.header("content-type"), Some("text/event-stream"));
     assert_eq(r.body(), "data: one\n\nevent: tick\ndata: two\ndata: lines\n\ndata: three\n\n");
+}
+
+// The client's bytes calls (0.2 spec 3): the body goes as it is, under
+// the type given, and a binary response comes back whole.
+#[test]
+async fn the_client_sends_and_reads_bytes() {
+    let app = served_app();
+    app.serve(41822).detach();
+    time::sleep(50).await;
+    let client = crate::Client::new();
+    // ff 00 01 02 80 fe
+    let sent = raw("/wABAoD+");
+    let r = match client.post_bytes("http://127.0.0.1:41822/bytes", sent, "image/x-test").await {
+        Ok(r) => r,
+        Err(e) => failed(e),
+    };
+    assert_eq(r.status(), 200);
+    assert_eq(r.body_bytes(), sent);
+    assert_eq(r.header("content-type"), Some("image/x-test"));
+    assert_eq(r.body(), "");
+    let r = match client.put_bytes("http://127.0.0.1:41822/bytes", sent, "application/octet-stream").await {
+        Ok(r) => r,
+        Err(e) => failed(e),
+    };
+    assert_eq(r.status(), 200);
+    assert_eq(r.body_bytes(), sent);
+    assert_eq(r.header("content-type"), Some("application/octet-stream"));
+    // The JSON calls keep their type.
+    let r = match client.post("http://127.0.0.1:41822/bytes", "hi").await {
+        Ok(r) => r,
+        Err(e) => failed(e),
+    };
+    assert_eq(r.body(), "\"hi\"");
+    assert_eq(r.header("content-type"), Some("application/json"));
+    let r = fetch(client, "http://127.0.0.1:41822/png").await;
+    assert_eq(r.status(), 200);
+    assert_eq(r.body_bytes(), raw("iVBORw0KGgo="));
+    assert_eq(r.body(), "");
+}
+
+// Plan, Review Focus 5: a content type that is not a header value is an
+// `Err` before anything is sent (nothing listens on 41899, so a request
+// sent would fail otherwise), naming no path or query.
+#[test]
+async fn a_bytes_content_type_that_is_not_valid_http_is_an_err() {
+    let client = crate::Client::new();
+    let kind = format!("a{}b", crlf());
+    match client.post_bytes("http://127.0.0.1:41899/private?token=s3cret", raw("/wABAoD+"), kind).await {
+        Ok(r) => assert_eq(r.status(), 0),
+        Err(e) => assert_eq(e.message(), "the content type is not valid HTTP"),
+    }
+    match client.put_bytes("http://127.0.0.1:41899/private?token=s3cret", raw("/wABAoD+"), kind).await {
+        Ok(r) => assert_eq(r.status(), 0),
+        Err(e) => assert_eq(e.message(), "the content type is not valid HTTP"),
+    }
 }
 
 async fn status_or_zero(client: crate::Client, url: string) -> u16 {

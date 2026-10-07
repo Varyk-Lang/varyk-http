@@ -1,5 +1,6 @@
 // The users API of the README: list, get, create, and delete users in a
-// database, behind an API key, with a health check open to the platform.
+// database, each with the time it was made, behind an API key, with a
+// health check open to the platform.
 
 mod tests;
 
@@ -15,6 +16,7 @@ struct Config {
 struct User {
     id: i64,
     name: string,
+    created_at: Time,
 }
 
 struct NewUser {
@@ -27,19 +29,20 @@ struct State {
 }
 
 async fn list_users(state: Shared<State>) -> Result<Vec<User>, Error> {
-    state.db.all("select id, name from users order by id").await
+    state.db.all("select id, name, created_at from users order by id").await
 }
 
 async fn get_user(id: i64, state: Shared<State>) -> Result<Option<User>, Error> {
-    state.db.first("select id, name from users where id = ?", id).await
+    state.db.first("select id, name, created_at from users where id = ?", id).await
 }
 
 async fn create_user(user: NewUser, state: Shared<State>) -> Result<http::Response, Error> {
     if user.name.is_empty() {
         return Err(http::bad_request("a user needs a name"));
     }
-    let id: i64 = state.db.one("insert into users (name) values (?) returning id", user.name).await?;
-    let mut r = http::Response::json(User { id: id, name: user.name.clone() });
+    let created_at = Time::now();
+    let id: i64 = state.db.one("insert into users (name, created_at) values (?, ?) returning id", user.name, created_at).await?;
+    let mut r = http::Response::json(User { id: id, name: user.name.clone(), created_at: created_at });
     r.set_status(201);
     r.set_header("location", format!("/users/{}", id));
     Ok(r)

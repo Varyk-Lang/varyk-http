@@ -835,7 +835,8 @@ since the package needs the first and the demo the second.
 ## 9. Not in this version
 
 HTTP/2 and TLS in the server (the proxy's); binary WebSocket messages and
-bytes bodies (milestone 5c brings a bytes type); streaming request and
+bytes bodies (milestone 5c brings a bytes type; 0.2 adds them,
+`2026-10-07-varyk-http-0.2-design.md` §3); streaming request and
 response bodies beyond `Response::file` and `save_to`; per-request
 client headers and a request builder; client cookies and proxies; route
 groups and a wrapping hook (M5b4 §11); OpenTelemetry; rate limiting per
@@ -850,6 +851,8 @@ client; serving a whole folder of static files; templates.
 - Should metrics be exportable through OpenTelemetry beside Prometheus?
 - When milestone 5c brings bytes, should WebSockets and bodies take them
   in the same calls (`send_bytes`, `Response::bytes`) or new ones?
+  Answered in 0.2: new calls beside the text ones
+  (`2026-10-07-varyk-http-0.2-design.md` §1.1).
 
 ## 11. Decisions
 

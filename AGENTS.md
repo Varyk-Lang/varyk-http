@@ -11,17 +11,19 @@ axum and tower-http, and an HTTP client on reqwest. It is a Varyk
 package: `src/lib.vr` is everything a program sees, the `.rs` files
 beside it are the facade over those crates and the only Rust,
 `src/tests.vr` holds the tests (the Rust tests, for what a Varyk
-program cannot reach, are in the facade's `#[cfg(test)]` modules: a
-WebSocket conversation in `src/live.rs`, the logged path in
-`src/message.rs`, and the idle timeout in `src/server.rs`, which
+program cannot reach, are in the facade's `#[cfg(test)]` modules:
+WebSocket conversations, text and binary, in `src/live.rs`, the logged
+path in `src/message.rs`, and the idle timeout in `src/server.rs`, which
 `varyk test` also runs), and `demo/users` is the users API of
 the fifteen-minute path. The design is in two places: the compiler side,
 how a Varyk function becomes a route handler and what the compiler
 checks and generates for it, is milestone 5b4 of Varyk,
 [`docs/specs/2026-10-05-milestone-5b4-design.md`](https://github.com/Varyk-Lang/varyk/blob/main/docs/specs/2026-10-05-milestone-5b4-design.md)
-in the compiler repository; the package side, the server and client
-surface, settings and defaults, live connections and uploads, is this
-repository's `docs/specs/`. Read both before changing what the package
+in the compiler repository, with section 6.1 of milestone 5c,
+[`docs/specs/2026-10-07-milestone-5c-design.md`](https://github.com/Varyk-Lang/varyk/blob/main/docs/specs/2026-10-07-milestone-5c-design.md),
+for `Time` and `Uuid` parameters; the package side, the server and
+client surface, settings and defaults, live connections and uploads, is
+this repository's `docs/specs/`. Read both before changing what the package
 offers.
 
 ## The gate
@@ -29,7 +31,7 @@ offers.
 Run the checks CONTRIBUTING.md lists ("Build and test") before every
 pull request: `varyk check`, `varyk test`, the demo's `varyk test` in
 `demo/users`, rustfmt on the `.rs` files, and clippy on the crate
-`varyk publish --assemble-only` writes, with varyk 0.7 from crates.io.
+`varyk publish --assemble-only` writes, with varyk 0.8 from crates.io.
 CI's `test` and
 `msrv` jobs are required checks: keep those job names, and keep the
 code building on Rust 1.85 (no let-chains).
@@ -41,9 +43,11 @@ code building on Rust 1.85 (no let-chains).
   its methods, `Request` with `param`, `query`, `json`, `state`, and
   `bind`, `Response`, `route`, `before_hook`, `after_hook`, and the
   `respond_*` functions, with the receivers and the `Send`, `Sync`, and
-  `Clone` bounds that section fixes. Their
-  names and signatures change only together with a varyk release, as a
-  breaking change, with the README's version table updated. Anything
+  `Clone` bounds that section fixes. Section 6.1 of the 5c spec adds
+  that `param` and `query` take `varyk_std::Time` and
+  `varyk_std::Uuid` (today through the `Plain` trait). Their names and
+  signatures change only together with a varyk release, as a breaking
+  change, with the README's version table updated. Anything
   else is this package's to change.
 - **A program never names axum, tower, or reqwest.** The generated Rust
   of a program reaches this package through its own key only. What an
@@ -52,8 +56,8 @@ code building on Rust 1.85 (no let-chains).
 - **A new kind of handler parameter is added here, not in the compiler.**
   Every struct named at the package's root other than `App`,
   `Response`, and `Client` is bound by type, so `bind` must accept it;
-  helper types (`Part`, the hook wrappers) stay in their module. How
-  `bind` bounds its types is this package's business. `WebSocket`,
+  helper types (`Part`, `Message`, the hook wrappers) stay in their
+  module. How `bind` bounds its types is this package's business. `WebSocket`,
   `Sse`, and `Multipart` are bound that way.
 - **No crash on absence.** The facade never panics: no `unwrap`,
   `expect`, or indexing that can fail. Every failure is a

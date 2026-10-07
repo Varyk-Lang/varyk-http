@@ -3,6 +3,7 @@
 
 use std::time::Duration;
 
+use axum::body::Bytes;
 use axum::http::{HeaderMap, HeaderName, HeaderValue};
 use reqwest::redirect::{Action, Attempt, Policy};
 
@@ -12,6 +13,8 @@ const TIMEOUT_MS: u64 = 30_000;
 const BODY_LIMIT: u64 = 10 * 1024 * 1024;
 /// How many redirects are followed before the next is given back.
 const REDIRECTS: usize = 10;
+/// The content type of the JSON calls' bodies.
+const JSON: &str = "application/json";
 
 /// An HTTP client; `client.clone()` shares its connections.
 #[derive(Clone)]
@@ -72,8 +75,9 @@ impl Client {
         url: &str,
         body: &T,
     ) -> Result<crate::message::Response, varyk_std::Error> {
-        let body = varyk_std::json::stringify(body);
-        self.send(reqwest::Method::POST, url, Some(body)).await
+        let body = Bytes::from(varyk_std::json::stringify(body));
+        self.send(reqwest::Method::POST, url, Some((body, JSON)))
+            .await
     }
 
     /// Sends `body` as JSON.
@@ -82,8 +86,9 @@ impl Client {
         url: &str,
         body: &T,
     ) -> Result<crate::message::Response, varyk_std::Error> {
-        let body = varyk_std::json::stringify(body);
-        self.send(reqwest::Method::PUT, url, Some(body)).await
+        let body = Bytes::from(varyk_std::json::stringify(body));
+        self.send(reqwest::Method::PUT, url, Some((body, JSON)))
+            .await
     }
 
     /// Sends `body` as JSON.
@@ -92,8 +97,35 @@ impl Client {
         url: &str,
         body: &T,
     ) -> Result<crate::message::Response, varyk_std::Error> {
-        let body = varyk_std::json::stringify(body);
-        self.send(reqwest::Method::PATCH, url, Some(body)).await
+        let body = Bytes::from(varyk_std::json::stringify(body));
+        self.send(reqwest::Method::PATCH, url, Some((body, JSON)))
+            .await
+    }
+
+    /// Sends `b` as it is, under `content_type`; an `Err` when
+    /// `content_type` is not a valid header value.
+    pub async fn post_bytes(
+        &self,
+        url: &str,
+        b: &varyk_std::Bytes,
+        content_type: &str,
+    ) -> Result<crate::message::Response, varyk_std::Error> {
+        let body = Bytes::from(b.clone());
+        self.send(reqwest::Method::POST, url, Some((body, content_type)))
+            .await
+    }
+
+    /// Sends `b` as it is, under `content_type`; an `Err` when
+    /// `content_type` is not a valid header value.
+    pub async fn put_bytes(
+        &self,
+        url: &str,
+        b: &varyk_std::Bytes,
+        content_type: &str,
+    ) -> Result<crate::message::Response, varyk_std::Error> {
+        let body = Bytes::from(b.clone());
+        self.send(reqwest::Method::PUT, url, Some((body, content_type)))
+            .await
     }
 
     fn rebuild(&mut self) {
@@ -138,15 +170,27 @@ impl Client {
     }
 
     /// Sends one request and reads its response whole, up to the body
-    /// limit. An `Err`'s message names the URL's scheme and host only,
-    /// never its path or query, which may carry a token.
+    /// limit, with `body` under its content type when there is one. An
+    /// `Err`'s message names the URL's scheme and host only, never its path
+    /// or query, which may carry a token.
     async fn send(
         &self,
         method: reqwest::Method,
         url: &str,
-        body: Option<String>,
+        body: Option<(Bytes, &str)>,
     ) -> Result<crate::message::Response, varyk_std::Error> {
         let client = self.built.as_ref().map_err(Clone::clone)?;
+        let body = match body {
+            Some((bytes, content_type)) => match HeaderValue::from_str(content_type) {
+                Ok(content_type) => Some((bytes, content_type)),
+                Err(_) => {
+                    return Err(varyk_std::Error::new(
+                        "the content type is not valid HTTP".to_string(),
+                    ));
+                }
+            },
+            None => None,
+        };
         let url = reqwest::Url::parse(url)
             .map_err(|err| varyk_std::Error::new(format!("the URL cannot be read: {err}")))?;
         let origin = format!("{}://{}", url.scheme(), url.host_str().unwrap_or_default());
@@ -167,9 +211,9 @@ impl Client {
             })
         };
         let mut request = client.request(method, url);
-        if let Some(body) = body {
+        if let Some((body, content_type)) = body {
             request = request
-                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .header(axum::http::header::CONTENT_TYPE, content_type)
                 .body(body);
         }
         let mut response = request.send().await.map_err(failed)?;
@@ -194,7 +238,11 @@ impl Client {
             }
             read.extend_from_slice(&chunk);
         }
-        Ok(crate::message::Response::read_back(status, &headers, read))
+        Ok(crate::message::Response::read_back(
+            status,
+            &headers,
+            Bytes::from(read),
+        ))
     }
 }
 

@@ -9,16 +9,18 @@ after two weeks is welcome.
 
 The compiler side of the design is Varyk's
 [5b4 spec](https://github.com/Varyk-Lang/varyk/blob/main/docs/specs/2026-10-05-milestone-5b4-design.md),
-whose section 6 is the contract this package implements; the package
-side is in `docs/specs/` here. A change to what the package offers
-starts as an issue, here or in Varyk's
+whose section 6 is the contract this package implements, with section
+6.1 of the [5c spec](https://github.com/Varyk-Lang/varyk/blob/main/docs/specs/2026-10-07-milestone-5c-design.md)
+for `Time` and `Uuid` parameters; the package side is in `docs/specs/`
+here. A change to what the package offers starts as an issue, here or
+in Varyk's
 [Discussions](https://github.com/Varyk-Lang/varyk/discussions).
 
 ## Build and test
 
 You need a stable Rust toolchain through [rustup](https://rustup.rs), a
 C compiler (the demo's SQLite is built from C), and `varyk` (`cargo
-install varyk --version '^0.7' --locked`, the latest 0.7 release, as CI
+install varyk --version '^0.8' --locked`, the latest 0.8 release, as CI
 uses). The package is a Varyk package
 (`src/lib.vr`), so it is built only by `varyk`; plain `cargo build`
 does not work here. Before opening a pull request, run the same checks
@@ -52,18 +54,20 @@ check; a red run means a new varyk needs a varyk-http release.
   over axum, tower-http, and reqwest, and the only Rust: `server.rs`
   (`App`, its settings, the router, `serve`, `request`, the route
   wrapper, the hooks), `message.rs` (`Request`, `Response`, cookies,
-  files, the `respond_*` functions), `live.rs` (`WebSocket`, `Sse`,
-  `Multipart`, `Part`), `client.rs` (`Client`), and `metrics.rs`. They
-  never panic: no `unwrap`, `expect`, or indexing that can fail, and
-  every failure becomes a `varyk_std::Error`. An error without a status
+  files, the `respond_*` functions), `live.rs` (`WebSocket`, `Message`,
+  `Sse`, `Multipart`, `Part`), `client.rs` (`Client`), and
+  `metrics.rs`. They never panic: no `unwrap`, `expect`, or indexing
+  that can fail, and every failure becomes a `varyk_std::Error`. An error without a status
   is a 500 whose message is logged and not sent, so no internal failure
   reaches a client. The items the compiler's generated Rust calls
-  (section 6 of the 5b4 spec) change only with a varyk release.
+  (section 6 of the 5b4 spec, with section 6.1 of the 5c spec) change
+  only with a varyk release.
 - `src/tests.vr` holds the tests (the Rust tests, for what a Varyk
   program cannot reach, are in the facade's `#[cfg(test)]` modules,
-  which `varyk test` also runs: a WebSocket conversation with
-  tokio-tungstenite as the client in `src/live.rs`, the logged path in
-  `src/message.rs`, and the idle timeout in `src/server.rs`),
+  which `varyk test` also runs: WebSocket conversations, text and
+  binary, with tokio-tungstenite as the client in `src/live.rs`, the
+  logged path in `src/message.rs`, and the idle timeout in
+  `src/server.rs`),
   as a module: a Varyk package may not have a `tests/`, `examples/`, or
   `benches/` directory. Its own module `src/tests/handlers.vr` holds a
   handler of another module, for a route that names one. Most send
@@ -81,9 +85,10 @@ check; a red run means a new varyk needs a varyk-http release.
   the same varyk; a change that moves the package to a new varyk moves
   the demo's `varyk-std` and `varyk-sql` lines with it. release-please
   does not touch the demo's manifest.
-- `docs/specs/` holds the package's design, and `docs/plans/` the plan
-  it was built from; read the spec, and the compiler's 5b4 spec, before
-  changing what the package offers.
+- `docs/specs/` holds the package's design, 0.1's spec and the 0.2 spec
+  that extends it, and `docs/plans/` the plans they were built from;
+  read the specs, and the compiler's 5b4 and 5c specs, before changing
+  what the package offers.
 
 Rust code follows Varyk's
 [AGENTS.md](https://github.com/Varyk-Lang/varyk/blob/main/AGENTS.md):

@@ -6,8 +6,8 @@ client for Varyk services, on [axum](https://github.com/tokio-rs/axum),
 [tower-http](https://github.com/tower-rs/tower-http), and
 [reqwest](https://github.com/seanmonstar/reqwest).
 
-varyk-http 0.1.0 is on [crates.io](https://crates.io/crates/varyk-http)
-and works with varyk 0.7 (see [Versions](#versions)). Varyk is
+varyk-http 0.2.0 is on [crates.io](https://crates.io/crates/varyk-http)
+and works with varyk 0.8 (see [Versions](#versions)). Varyk is
 experimental and pre-1.0: anything here may change.
 
 The package covers what an ordinary production API needs and nothing
@@ -20,7 +20,7 @@ what the compiler does with routes is the HTTP section of Varyk's
 ## Install
 
 ```sh
-cargo install varyk --version '^0.7' --locked
+cargo install varyk --version '^0.8' --locked
 varyk init users
 cd users
 varyk add http sql
@@ -50,6 +50,7 @@ struct Config {
 struct User {
     id: i64,
     name: string,
+    created_at: Time,
 }
 
 struct NewUser {
@@ -62,19 +63,20 @@ struct State {
 }
 
 async fn list_users(state: Shared<State>) -> Result<Vec<User>, Error> {
-    state.db.all("select id, name from users order by id").await
+    state.db.all("select id, name, created_at from users order by id").await
 }
 
 async fn get_user(id: i64, state: Shared<State>) -> Result<Option<User>, Error> {
-    state.db.first("select id, name from users where id = ?", id).await
+    state.db.first("select id, name, created_at from users where id = ?", id).await
 }
 
 async fn create_user(user: NewUser, state: Shared<State>) -> Result<http::Response, Error> {
     if user.name.is_empty() {
         return Err(http::bad_request("a user needs a name"));
     }
-    let id: i64 = state.db.one("insert into users (name) values (?) returning id", user.name).await?;
-    let mut r = http::Response::json(User { id: id, name: user.name.clone() });
+    let created_at = Time::now();
+    let id: i64 = state.db.one("insert into users (name, created_at) values (?, ?) returning id", user.name, created_at).await?;
+    let mut r = http::Response::json(User { id: id, name: user.name.clone(), created_at: created_at });
     r.set_status(201);
     r.set_header("location", format!("/users/{}", id));
     Ok(r)
@@ -137,9 +139,14 @@ async fn main() {
 ```sql
 create table users (
     id integer primary key,
-    name text not null
+    name text not null,
+    created_at text not null
 );
 ```
+
+SQLite has no time type, so `created_at` is `text`, and varyk-sql
+writes a `Time` into it as text of a fixed width and reads it back (its
+[column types](https://github.com/Varyk-Lang/varyk-sql#column-types)).
 
 `.env`:
 
@@ -152,8 +159,10 @@ API_KEY=dev-key
 
 ```sh
 curl -i -H 'x-api-key: dev-key' -d '{"name":"Ada"}' 127.0.0.1:3000/users
-# 201, location: /users/1, {"id":1,"name":"Ada"}
-curl -H 'x-api-key: dev-key' 127.0.0.1:3000/users/1   # {"id":1,"name":"Ada"}
+# 201, location: /users/1,
+# {"id":1,"name":"Ada","created_at":"2026-10-07T12:00:00.123456Z"}
+curl -H 'x-api-key: dev-key' 127.0.0.1:3000/users/1
+# {"id":1,"name":"Ada","created_at":"2026-10-07T12:00:00.123456Z"}
 curl -H 'x-api-key: dev-key' 127.0.0.1:3000/users/2   # 404 {"error":"not found"}
 curl 127.0.0.1:3000/users                             # 401
 curl 127.0.0.1:3000/health                            # "ok"
@@ -163,14 +172,20 @@ The same program, with its tests, is in [`demo/users`](demo/users).
 
 A handler is an ordinary `async fn`. Its parameters are bound by name to
 the path (`{id}`) and the query string, and by type to the JSON body,
-the shared state, and the request. Its return value is the response: a
-value is JSON with 200, `None` is 404, nothing is 204, and an
-`http::Response` is sent as built. `varyk check` checks every route
+the shared state, and the request. A path or query value is an integer,
+`bool`, `string`, `Time`, or `Uuid`, and a query value may be an
+`Option` of one, `None` when it is missing. A `Time` reads as
+`Time::from_iso` reads it (`2026-10-07T12:00:00Z`, or with an offset,
+taken to UTC), and a `Uuid` in its 36-character form. In a query string
+a `+` reads as a space, as forms encode it, so an offset is sent as
+`%2B`: `?since=2026-10-07T12:00:00%2B02:00`. The handler's return value is the
+response: a value is JSON with 200, `None` is 404, nothing is 204, and
+an `http::Response` is sent as built. `varyk check` checks every route
 against its handler before anything builds. A path or query value that
-does not parse as its type, a missing query value, and a body that is
-not JSON of its type are each a 400 naming the parameter, and the
-handler is not called. The language reference has
-[the full rules](https://github.com/Varyk-Lang/varyk/blob/main/docs/language.md#routes-and-their-handlers).
+does not parse as its type, a missing query value that is not an
+`Option`, and a body that is not JSON of its type are each a 400 naming
+the parameter, and the handler is not called. The language reference
+has [the full rules](https://github.com/Varyk-Lang/varyk/blob/main/docs/language.md#routes-and-their-handlers).
 
 ## Settings
 
@@ -229,6 +244,7 @@ work, two routes the router cannot tell apart (`GET /users/{id}` and
 | `req.method()`, `req.path()` | `string`; the path without its query string |
 | `req.header(name)`, `req.cookie(name)` | `Option<string>`; a header name is matched without regard to case |
 | `req.body()` | `string`, the body as text (empty when it is not UTF-8, and for a multipart form) |
+| `req.body_bytes()` | `Bytes`, the body as it came, with no copy (empty for a multipart form) |
 
 `http::Response`:
 
@@ -236,15 +252,23 @@ work, two routes the router cannot tell apart (`GET /users/{id}` and
 |---|---|
 | `http::Response::json(value)` | 200, `content-type: application/json` |
 | `http::Response::text(s)` | 200, `content-type: text/plain; charset=utf-8` |
+| `http::Response::bytes(b, content_type)` | 200, the body `b` as it is, with that `content-type` and `x-content-type-options: nosniff`, as a file has |
 | `http::Response::empty()` | 204 |
 | `http::Response::file(dir, name)` | the file `name` in the folder `dir`, with a content type from its extension |
 | `r.set_status(code)`, `r.set_header(name, value)` | change it |
 | `r.set_cookie(name, value, max_age)` | a cookie with `Path=/`, `HttpOnly`, `Secure`, `SameSite=Lax`, and `Max-Age` in seconds; `0` deletes it |
 | `r.status()`, `r.header(name)`, `r.body()`, `r.read_json()` | read it, in a test or from the client; `r.body()` is empty when the body is not UTF-8 |
+| `r.body_bytes()` | `Bytes`, the body `r.body()` reads, with no UTF-8 check: as it came, from `app.request` or the client; for a response a handler built, its text or bytes, a file's content read whole, and empty for an event stream |
 
-A header that is not valid HTTP, a status outside 100 to 599, and a
+A header that is not valid HTTP (the `content_type` of
+`Response::bytes` among them), a status outside 100 to 599, and a
 cookie name or value that could add attributes (a `;`, a comma, a
 space, a quote) make the response a 500, with the reason logged.
+
+A `Bytes` given to the JSON calls (`Response::json(b)`, the client's
+`post(url, b)`) or returned by a handler is sent as a JSON string of
+base64, as any value is. For a raw body, use `Response::bytes` and the
+client's `post_bytes` and `put_bytes`.
 
 `Response::file` serves a file from a folder, streamed as it is sent:
 
@@ -340,16 +364,34 @@ upgrade is a 400.
 
 | Call | Gives |
 |---|---|
-| `ws.recv().await` | `Result<Option<string>, Error>`: the next text message, `None` once the client has closed or gone |
+| `ws.recv().await` | `Result<Option<string>, Error>`: the next text message, `None` once the client has closed or gone; a binary message closes the connection (take it with `recv_message`) |
+| `ws.recv_message().await` | `Result<Option<http::live::Message>, Error>`: the next message, text or binary; `None` as `recv` gives it |
 | `ws.send(text).await` | `Result<bool, Error>`; an `Err` once the connection is gone |
+| `ws.send_bytes(b).await` | the same, for one binary message |
 | `ws.close().await` | `Result<bool, Error>`: `true` closed, `false` when it was closed already |
 
-Messages are text, and the package answers pings. A client's fault
-closes the connection, with `recv` giving `None` and the reason logged
-at debug level: a binary message with code 1003, a malformed message
-with 1002 (1007 for text that is not UTF-8), and a message larger than
-the body limit with 1009. The handler's return closes it normally
-(1000).
+A handler that takes binary messages reads them with `recv_message`,
+whose `http::live::Message` is `Text(string)` or `Binary(Bytes)`:
+
+```varyk
+async fn echo(ws: http::WebSocket) -> Result<http::Response, Error> {
+    while let Some(message) = ws.recv_message().await? {
+        match message {
+            http::live::Message::Text(text) => ws.send(text).await?,
+            http::live::Message::Binary(b) => ws.send_bytes(b).await?,
+        };
+    }
+    Ok(http::Response::empty())
+}
+```
+
+`recv` takes text messages only, and the package answers pings. A
+client's fault closes the connection, with `recv` or `recv_message`
+giving `None` and the reason logged at debug level: a binary message
+under `recv` with code 1003 (`recv_message` gives it instead), a
+malformed message with 1002 (1007 for text that is not UTF-8), and a
+message larger than the body limit with 1009. The handler's return
+closes it normally (1000).
 
 ### Server-sent events
 
@@ -392,16 +434,18 @@ with `app.post("/users/{id}/avatar", upload_avatar);`.
 | `form.next().await` | `Result<Option<http::live::Part>, Error>`: the next part, `None` after the last |
 | `part.name()` | `string`, the form field's name |
 | `part.file_name()` | `Option<string>`, the name the client gave a file |
+| `part.content_type()` | `Option<string>`, the content type the client declared for the part, as it wrote it and not checked; `None` when it declared none, or one that is not visible ASCII |
 | `part.text().await` | `Result<string, Error>`, the content as text |
+| `part.bytes().await` | `Result<Bytes, Error>`, the content as it came |
 | `part.save_to(dir, name).await` | `Result<u64, Error>`: writes the content to the file `name` in the folder `dir`, which must exist, and gives the bytes written |
 
 Save an upload under a name and extension the program chooses, as
-above, never under `part.file_name()`, which is whatever the client
-sent. `save_to` refuses a name by the rule of `Response::file` and
-writes to a temporary file first, so a failed upload leaves nothing
-behind. A part's content is read once. What the handler reads counts
-against the body limit: past it, the request is a 413 whatever the
-handler returns. What it leaves unread is never read. A request that is not `multipart/form-data` is a 400.
+above, never under `part.file_name()`: it is whatever the client sent,
+as `part.content_type()` is. `save_to` refuses a name by the rule of
+`Response::file` and writes to a temporary file first, so a failed
+upload leaves nothing behind. A part's content is read once, by `text`,
+`bytes`, or `save_to`. What the handler reads counts against the body
+limit: past it, the request is a 413 whatever the handler returns. What it leaves unread is never read. A request that is not `multipart/form-data` is a 400.
 
 ## The client
 
@@ -437,11 +481,13 @@ fn weather_client(key: string) -> http::Client {
 | `client.set_body_limit(bytes)` | default 10 MiB, the largest response body read |
 | `client.get(url)`, `client.delete(url)` | `Result<http::Response, Error>` |
 | `client.post(url, body)`, `client.put(url, body)`, `client.patch(url, body)` | the same, with `body` sent as JSON |
+| `client.post_bytes(url, b, content_type)`, `client.put_bytes(url, b, content_type)` | the same, with `b` sent as it is, under that `content-type` |
 
 A response of any status is `Ok`. An `Err` is a response that could
-not be had: a URL that is not `http` or `https`, a connection or TLS
-failure, the timeout, or a body over the limit. Its message names the
-scheme and host, never the path or query, which may hold a token.
+not be had: a URL that is not `http` or `https`, a content type that
+is not valid HTTP, a connection or TLS failure, the timeout, or a body
+over the limit. Its message names at most the scheme and host, never the path
+or query, which may hold a token.
 Redirects are followed, up to ten, only to the same scheme, host, and
 port; any other is given back as its 3xx response. A setting that
 cannot work (a header that is not valid HTTP, a timeout or limit of 0)
@@ -510,11 +556,11 @@ async fn creates_a_user() {
 ```
 
 `http::Request::new(method, path)` makes a request (the path may carry
-a query string), and `req.set_header(name, value)` and
-`req.set_body(text)` fill it in. An event stream's events are collected
-whole once its handler returns, so `r.body()` gives them; a WebSocket
-route answers a 400, since no request `app.request` sends is an
-upgrade. Each `sqlite::memory:` pool is a database of its own, so every
+a query string), and `req.set_header(name, value)`,
+`req.set_body(text)`, and `req.set_body_bytes(b)`, for a body of bytes,
+fill it in. An event stream's events are collected whole once its
+handler returns, so `r.body()` gives them; a WebSocket route answers a
+400, since no request `app.request` sends is an upgrade. Each `sqlite::memory:` pool is a database of its own, so every
 test starts empty. Run `varyk test` from the package's folder, where
 `migrations` and `.env` are.
 
@@ -532,7 +578,7 @@ image has Debian 12's C library, so the build stage is Debian 12 too:
 
 ```dockerfile
 FROM rust:1-bookworm AS build
-RUN cargo install varyk --version '^0.7' --locked
+RUN cargo install varyk --version '^0.8' --locked
 WORKDIR /src
 COPY . .
 RUN varyk build --release
@@ -578,7 +624,7 @@ so behind one, set the idle timeout above that, as Google advises:
 **TLS** is the proxy's or the load balancer's: the package serves plain
 HTTP/1.1. So are security headers such as `strict-transport-security`
 and `content-security-policy`; the package sets only
-`x-content-type-options: nosniff`, on a file response.
+`x-content-type-options: nosniff`, on a file or bytes response.
 
 **Health.** A `get("/health", health)` route whose handler runs
 `db.run("select 1")`, as in the first service, outside any `before_on`
@@ -695,6 +741,7 @@ release is followed by a varyk-http release.
 | varyk-http | varyk |
 |---|---|
 | 0.1 | 0.7 |
+| 0.2 | 0.8 |
 
 ## Security
 

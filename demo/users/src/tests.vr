@@ -28,21 +28,44 @@ async fn users_are_created_listed_read_and_deleted() {
             return;
         }
     };
+    let before = Time::now();
     let r = app.request(new_user("Ada")).await;
+    let after = Time::now();
     assert_eq(r.status(), 201);
     assert_eq(r.header("location"), Some("/users/1"));
-    assert_eq(r.body(), "{\"id\":1,\"name\":\"Ada\"}");
+    let made: Result<crate::User, Error> = r.read_json();
+    let ada = match made {
+        Ok(u) => u,
+        Err(e) => {
+            assert_eq(e.message(), "no error");
+            return;
+        }
+    };
+    assert_eq(ada.id, 1);
+    assert_eq(ada.name, "Ada");
+    assert(before <= ada.created_at);
+    assert(ada.created_at <= after);
     assert_eq(app.request(new_user("Bo")).await.status(), 201);
 
     let r = app.request(with_key("GET", "/users")).await;
     assert_eq(r.status(), 200);
-    assert_eq(r.body(), "[{\"id\":1,\"name\":\"Ada\"},{\"id\":2,\"name\":\"Bo\"}]");
+    let listed: Result<Vec<crate::User>, Error> = r.read_json();
+    match listed {
+        Ok(users) => {
+            let names: Vec<string> = users.iter().map(|u| format!("{} {}", u.id, u.name)).collect();
+            assert_eq(names.join(", "), "1 Ada, 2 Bo");
+        }
+        Err(e) => assert_eq(e.message(), "no error"),
+    }
 
-    let r = app.request(with_key("GET", "/users/2")).await;
+    let r = app.request(with_key("GET", "/users/1")).await;
     assert_eq(r.status(), 200);
-    let user: Result<crate::User, Error> = r.read_json();
-    match user {
-        Ok(u) => assert_eq(u.name, "Bo"),
+    let read: Result<crate::User, Error> = r.read_json();
+    match read {
+        Ok(u) => {
+            assert_eq(u.name, "Ada");
+            assert_eq(u.created_at, ada.created_at);
+        }
         Err(e) => assert_eq(e.message(), "no error"),
     }
 

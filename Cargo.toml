@@ -17,7 +17,7 @@ path = "src/lib.vr"
 # JSON, serde, and tracing come through varyk-std, so they always agree
 # with the program's own `json::` and `log::` calls.
 [dependencies]
-varyk-std = "0.7"
+varyk-std = "0.8"
 axum = { version = "0.8.9", default-features = false, features = ["tokio", "http1", "ws"] }
 tower-http = { version = "0.6", default-features = false, features = ["catch-panic", "cors", "compression-gzip"] }
 tokio = { version = "1", default-features = false, features = ["net", "rt", "signal", "fs", "io-util", "sync", "time"] }
