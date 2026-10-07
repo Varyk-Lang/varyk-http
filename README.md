@@ -119,18 +119,12 @@ fn build_app(state: Shared<State>) -> http::App {
     app
 }
 
-async fn start() -> Result<bool, Error> {
+async fn main() -> Result<bool, Error> {
     let config: Config = env::parse()?;
     let db = open_db(config.database_url).await?;
     let mut app = build_app(Shared::new(State { db: db, api_key: config.api_key.clone() }));
     app.set_address(config.address);
     app.serve(config.port).await
-}
-
-async fn main() {
-    if let Err(e) = start().await {
-        log::error("{}", e);
-    }
 }
 ```
 
