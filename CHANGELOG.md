@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.0](https://github.com/Varyk-Lang/varyk-http/compare/v0.1.0...v0.2.0) (2026-10-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* the package needs varyk 0.8 and varyk-std 0.8.
+
+### Features
+
+* time, ids, and bytes ([3fdc4b3](https://github.com/Varyk-Lang/varyk-http/commit/3fdc4b31281c86113cdef84e22693ddeff83b03a))
+
 ## 0.1.0 (2026-10-06)
 
 
