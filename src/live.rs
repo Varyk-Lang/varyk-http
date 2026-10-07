@@ -7,12 +7,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
-use axum::extract::ws::{CloseFrame, Message, Utf8Bytes, close_code};
+use axum::extract::ws::{CloseFrame, Message as Frame, Utf8Bytes, close_code};
 use futures_util::StreamExt;
 use tokio::io::AsyncWriteExt;
 
-/// A WebSocket connection, on a `get` route. Messages are text; ping and
-/// pong are answered by the package (spec 2.5).
+/// A WebSocket connection, on a `get` route. `recv` and `send` carry
+/// text, `recv_message` and `send_bytes` binary messages as well (0.2
+/// spec 3); ping and pong are answered by the package (spec 2.5).
 pub struct WebSocket {
     /// The connection, none once it is closing or gone. One lock for
     /// reading and writing: a handler borrows its parameter, so it cannot
@@ -24,6 +25,13 @@ pub struct WebSocket {
     client_closed: AtomicBool,
     /// The request's record of an `Err` for a client that has gone.
     gone: crate::message::ClientGone,
+}
+
+/// One WebSocket message, as `recv_message` gives it: text, or binary
+/// bytes, matched in Varyk as `http::live::Message` (0.2 spec 3).
+pub enum Message {
+    Text(String),
+    Binary(varyk_std::Bytes),
 }
 
 /// The message of a WebSocket upgrade that did not complete.
@@ -49,11 +57,14 @@ pub struct Multipart {
     form: Arc<tokio::sync::Mutex<Form>>,
 }
 
-/// One part of a `Multipart`: its name, the file name the client gave,
-/// and a handle to the form, through which its content is read once.
+/// One part of a `Multipart`: its name, the file name and content type
+/// the client gave, and a handle to the form, through which its content
+/// is read once.
 pub struct Part {
     name: String,
     file_name: Option<String>,
+    /// The part's `Content-Type` header as written, not checked.
+    content_type: Option<String>,
     /// Which part of the form this is, counted from 1; the form has moved
     /// on once its own count is past it.
     index: u64,
@@ -101,7 +112,7 @@ impl crate::message::Bound for WebSocket {
         let switching = crate::message::Response::read_back(
             switching.status().as_u16(),
             switching.headers(),
-            Vec::new(),
+            axum::body::Bytes::new(),
         );
         if !request.send_early(switching) {
             return Err(crate::message::internal_because(
@@ -133,6 +144,23 @@ impl WebSocket {
     /// one (1002, or 1007 for text that is not UTF-8), or one over the
     /// body limit (1009).
     pub async fn recv(&self) -> Result<Option<String>, varyk_std::Error> {
+        match self.read(false).await? {
+            Some(Message::Text(text)) => Ok(Some(text)),
+            // `read` closes with 1003 rather than give a binary message here.
+            Some(Message::Binary(_)) | None => Ok(None),
+        }
+    }
+
+    /// The next message, text or binary; `None` as `recv` gives it, but a
+    /// binary message is given, not closed with 1003.
+    pub async fn recv_message(&self) -> Result<Option<Message>, varyk_std::Error> {
+        self.read(true).await
+    }
+
+    /// Reads the next text message, and the next binary one when `binary`
+    /// is set, wrapping the frame's bytes with no copy; otherwise a binary
+    /// message closes the connection with 1003.
+    async fn read(&self, binary: bool) -> Result<Option<Message>, varyk_std::Error> {
         let mut slot = self.socket.lock().await;
         loop {
             let Some(socket) = slot.as_mut() else {
@@ -141,16 +169,21 @@ impl WebSocket {
             // A ping read here is answered by the next read or write.
             let received = socket.recv().await;
             match received {
-                Some(Ok(Message::Text(text))) => return Ok(Some(text.as_str().to_string())),
-                Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
-                Some(Ok(Message::Binary(_))) => {
+                Some(Ok(Frame::Text(text))) => {
+                    return Ok(Some(Message::Text(text.as_str().to_string())));
+                }
+                Some(Ok(Frame::Binary(bytes))) if binary => {
+                    return Ok(Some(Message::Binary(varyk_std::Bytes::from(bytes))));
+                }
+                Some(Ok(Frame::Ping(_) | Frame::Pong(_))) => {}
+                Some(Ok(Frame::Binary(_))) => {
                     varyk_std::tracing::debug!("a WebSocket client sent a binary message");
                     closing(slot.take(), Some(close_code::UNSUPPORTED));
                     self.client_closed.store(true, Ordering::SeqCst);
                     return Ok(None);
                 }
                 // The read that follows a client's close sends the reply.
-                Some(Ok(Message::Close(_))) | None => {
+                Some(Ok(Frame::Close(_))) | None => {
                     closing(slot.take(), None);
                     self.client_closed.store(true, Ordering::SeqCst);
                     return Ok(None);
@@ -170,6 +203,17 @@ impl WebSocket {
     /// Sends `text` as one message; an `Err` when the connection is closed
     /// or gone.
     pub async fn send(&self, text: &str) -> Result<bool, varyk_std::Error> {
+        self.send_frame(Frame::Text(Utf8Bytes::from(text))).await
+    }
+
+    /// Sends `b` as one binary message, a handle to its bytes with no
+    /// copy; an `Err` as `send` gives it.
+    pub async fn send_bytes(&self, b: &varyk_std::Bytes) -> Result<bool, varyk_std::Error> {
+        self.send_frame(Frame::Binary(axum::body::Bytes::from(b.clone())))
+            .await
+    }
+
+    async fn send_frame(&self, frame: Frame) -> Result<bool, varyk_std::Error> {
         let mut slot = self.socket.lock().await;
         let Some(socket) = slot.as_mut() else {
             if self.client_closed.load(Ordering::SeqCst) {
@@ -182,7 +226,7 @@ impl WebSocket {
                 "the message cannot be sent: the WebSocket connection is closed".to_string(),
             ));
         };
-        match socket.send(Message::Text(Utf8Bytes::from(text))).await {
+        match socket.send(frame).await {
             Ok(()) => Ok(true),
             Err(err) => {
                 *slot = None;
@@ -266,8 +310,8 @@ fn read_failed(err: axum::Error) -> Result<Option<u16>, varyk_std::Error> {
     }
 }
 
-fn close_message(code: u16) -> Message {
-    Message::Close(Some(CloseFrame {
+fn close_message(code: u16) -> Frame {
+    Frame::Close(Some(CloseFrame {
         code,
         reason: Utf8Bytes::default(),
     }))
@@ -424,6 +468,13 @@ impl Multipart {
                 let part = Part {
                     name: field.name().unwrap_or_default().to_string(),
                     file_name: field.file_name().map(|name| name.to_string()),
+                    // The header as written, not multer's parse of it: the
+                    // client's word, which a type multer refuses still is.
+                    content_type: field
+                        .headers()
+                        .get(axum::http::header::CONTENT_TYPE)
+                        .and_then(|value| value.to_str().ok())
+                        .map(|value| value.to_string()),
                     index: form.index,
                     form: Arc::clone(&self.form),
                 };
@@ -448,18 +499,36 @@ impl Part {
         self.file_name.clone()
     }
 
+    /// The content type the client declared for the part, as written:
+    /// its word, not checked; `None` when it declared none, or one that
+    /// is not visible ASCII.
+    pub fn content_type(&self) -> Option<String> {
+        self.content_type.clone()
+    }
+
     /// The part's content as text; an `Err` when it is not UTF-8, or was
     /// read already.
     pub async fn text(&self) -> Result<String, varyk_std::Error> {
+        String::from_utf8(self.read().await?).map_err(|_| {
+            varyk_std::Error::new(format!("the part {:?} is not UTF-8 text", self.name))
+        })
+    }
+
+    /// The part's content as it came; an `Err` when it was read already.
+    pub async fn bytes(&self) -> Result<varyk_std::Bytes, varyk_std::Error> {
+        let read = self.read().await?;
+        Ok(varyk_std::Bytes::from(axum::body::Bytes::from(read)))
+    }
+
+    /// The part's whole content, read once, under the form's body limit.
+    async fn read(&self) -> Result<Vec<u8>, varyk_std::Error> {
         let mut form = self.form.lock().await;
         let mut field = self.take(&mut form)?;
         let mut read = Vec::new();
         while let Some(chunk) = field.chunk().await.map_err(unreadable)? {
             read.extend_from_slice(&chunk);
         }
-        String::from_utf8(read).map_err(|_| {
-            varyk_std::Error::new(format!("the part {:?} is not UTF-8 text", self.name))
-        })
+        Ok(read)
     }
 
     /// Writes the part's content to the file `name` in the folder `dir`
@@ -620,6 +689,18 @@ mod tests {
         Ok(true)
     }
 
+    /// Echoes each message as it came, text as text and binary as binary
+    /// (0.2 spec 3).
+    async fn messages(ws: WebSocket) -> Result<bool, varyk_std::Error> {
+        while let Some(message) = ws.recv_message().await? {
+            match message {
+                super::Message::Text(text) => ws.send(&text).await?,
+                super::Message::Binary(b) => ws.send_bytes(&b).await?,
+            };
+        }
+        Ok(true)
+    }
+
     /// Sends one message and returns, which closes the connection.
     async fn hello(ws: WebSocket) -> Result<bool, varyk_std::Error> {
         ws.send("hi").await
@@ -645,6 +726,10 @@ mod tests {
         app.set_body_limit(64);
         app.get("/echo", route(|req| live(req, |ws| Box::pin(echo(ws)))));
         app.get("/hello", route(|req| live(req, |ws| Box::pin(hello(ws)))));
+        app.get(
+            "/messages",
+            route(|req| live(req, |ws| Box::pin(messages(ws)))),
+        );
         app.get(
             "/rooms/{id}",
             route(|req| async move {
@@ -721,6 +806,38 @@ mod tests {
             let mut client = connect(41813, "/echo").await;
             send(&mut client, Message::binary(vec![1, 2, 3])).await;
             assert_eq!(closed_with(&mut client).await, CloseCode::Unsupported);
+        });
+    }
+
+    #[test]
+    fn a_binary_message_is_given_by_recv_message() {
+        varyk_std::run(async {
+            serve(41820).await;
+            let mut client = connect(41820, "/messages").await;
+            send(&mut client, Message::binary(vec![0xff, 0x00, 0x80])).await;
+            assert_eq!(
+                next(&mut client).await,
+                Message::binary(vec![0xff, 0x00, 0x80])
+            );
+            send(&mut client, Message::text("hello")).await;
+            assert_eq!(next(&mut client).await, Message::text("hello"));
+            send(&mut client, Message::Ping("are you there".into())).await;
+            assert_eq!(
+                next(&mut client).await,
+                Message::Pong("are you there".into())
+            );
+            send(&mut client, Message::binary(vec![1, 2, 3])).await;
+            assert_eq!(next(&mut client).await, Message::binary(vec![1, 2, 3]));
+        });
+    }
+
+    #[test]
+    fn a_binary_message_over_the_limit_closes_with_1009_under_recv_message() {
+        varyk_std::run(async {
+            serve(41821).await;
+            let mut client = connect(41821, "/messages").await;
+            send(&mut client, Message::binary(vec![0xff; 100])).await;
+            assert_eq!(closed_with(&mut client).await, CloseCode::Size);
         });
     }
 

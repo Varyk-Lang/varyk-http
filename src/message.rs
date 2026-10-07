@@ -158,10 +158,12 @@ pub struct Response {
     hidden: Option<String>,
 }
 
-/// What a response sends: text, a file opened by `Response::file` and
-/// read when the response is sent, or the events an `Sse` sends.
+/// What a response sends: text, bytes as they are (`Response::bytes`,
+/// and a body received whole), a file opened by `Response::file` and read
+/// when the response is sent, or the events an `Sse` sends.
 enum Content {
     Text(String),
+    Raw(Bytes),
     File(std::fs::File),
     Events(mpsc::Receiver<String>),
 }
@@ -173,7 +175,8 @@ const CHUNK: usize = 64 * 1024;
 /// so proxies keep the connection open (spec 2.5).
 const KEEP_ALIVE: Duration = Duration::from_secs(15);
 
-/// A path value: an integer, `bool`, or text.
+/// A path or query value: an integer, `bool`, text, a `Time`, or a
+/// `Uuid`.
 pub trait Plain: std::str::FromStr {}
 
 impl Plain for i8 {}
@@ -187,6 +190,8 @@ impl Plain for u64 {}
 impl Plain for usize {}
 impl Plain for bool {}
 impl Plain for String {}
+impl Plain for varyk_std::Time {}
+impl Plain for varyk_std::Uuid {}
 
 /// A query value: a plain value, required, or an `Option` of one.
 pub trait QueryValue: Sized {
@@ -282,6 +287,12 @@ impl Request {
         }
     }
 
+    /// The body as it came, with no copy; empty for a multipart form, as
+    /// `body` is.
+    pub fn body_bytes(&self) -> varyk_std::Bytes {
+        varyk_std::Bytes::from(self.body.clone())
+    }
+
     /// Sets the header `name`, replacing one of the same name.
     pub fn set_header(&mut self, name: &str, value: &str) {
         put_header(&mut self.headers, name, value);
@@ -289,6 +300,11 @@ impl Request {
 
     pub fn set_body(&mut self, text: &str) {
         self.body = Bytes::from(text.to_string());
+    }
+
+    /// Sets the body to `b`, sharing its buffer.
+    pub fn set_body_bytes(&mut self, b: &varyk_std::Bytes) {
+        self.body = Bytes::from(b.clone());
     }
 
     /// The path parameter `name` as a `P`; a 400 naming it when it does
@@ -470,6 +486,23 @@ impl Response {
         }
     }
 
+    /// A 200 with `b` as the body, sharing its buffer, and `content_type`
+    /// put as `set_header` puts it: a value that is not valid HTTP makes
+    /// the response a 500 when it is sent. `nosniff`, as on a file, keeps
+    /// a browser to that content type.
+    pub fn bytes(b: &varyk_std::Bytes, content_type: &str) -> Response {
+        Response {
+            status: 200,
+            headers: vec![
+                ("content-type".to_string(), content_type.to_string()),
+                ("x-content-type-options".to_string(), "nosniff".to_string()),
+            ],
+            body: Content::Raw(Bytes::from(b.clone())),
+            problem: None,
+            hidden: None,
+        }
+    }
+
     /// A 204 with no body.
     pub fn empty() -> Response {
         Response {
@@ -554,19 +587,25 @@ impl Response {
     pub fn body(&self) -> String {
         match &self.body {
             Content::Text(text) => text.clone(),
+            Content::Raw(bytes) => std::str::from_utf8(bytes)
+                .map(str::to_string)
+                .unwrap_or_default(),
             Content::Events(_) => String::new(),
-            Content::File(file) => {
-                let mut file = file;
-                let mut read = Vec::new();
-                let whole = file
-                    .seek(SeekFrom::Start(0))
-                    .and_then(|_| file.read_to_end(&mut read));
-                match whole {
-                    Ok(_) => String::from_utf8(read).unwrap_or_default(),
-                    Err(_) => String::new(),
-                }
-            }
+            Content::File(file) => String::from_utf8(read_whole(file)).unwrap_or_default(),
         }
+    }
+
+    /// The body `body` reads, with no UTF-8 check: bytes as they are, with
+    /// no copy; a copy of text; a file's content read whole, empty when it
+    /// cannot be read; and empty for an event stream a handler holds.
+    pub fn body_bytes(&self) -> varyk_std::Bytes {
+        let bytes = match &self.body {
+            Content::Raw(bytes) => bytes.clone(),
+            Content::Text(text) => return varyk_std::Bytes::from_text(text),
+            Content::Events(_) => Bytes::new(),
+            Content::File(file) => Bytes::from(read_whole(file)),
+        };
+        varyk_std::Bytes::from(bytes)
     }
 
     /// The body read from JSON as a `T`.
@@ -617,6 +656,7 @@ impl Response {
         let headers = header_map(&self.headers)?;
         let body = match self.body {
             Content::Text(text) => Body::from(text),
+            Content::Raw(bytes) => Body::from(bytes),
             Content::File(mut file) => {
                 file.seek(SeekFrom::Start(0))
                     .map_err(|err| format!("the file cannot be read: {err}"))?;
@@ -634,20 +674,19 @@ impl Response {
     /// an event stream's events once its handler returns.
     pub(crate) async fn received(response: axum::response::Response) -> Response {
         let (parts, body) = response.into_parts();
-        let body = match axum::body::to_bytes(body, usize::MAX).await {
-            Ok(bytes) => bytes.to_vec(),
-            Err(_) => Vec::new(),
-        };
+        let body = axum::body::to_bytes(body, usize::MAX)
+            .await
+            .unwrap_or_default();
         Response::read_back(parts.status.as_u16(), &parts.headers, body)
     }
 
-    /// A response received whole, by `App::request` or the client; its
-    /// body empty when it is not UTF-8.
-    pub(crate) fn read_back(status: u16, headers: &HeaderMap, body: Vec<u8>) -> Response {
+    /// A response received whole, by `App::request` or the client, its
+    /// body kept as it came: `body` reads it as text, `body_bytes` as it is.
+    pub(crate) fn read_back(status: u16, headers: &HeaderMap, body: Bytes) -> Response {
         Response {
             status,
             headers: header_list(headers),
-            body: Content::Text(String::from_utf8(body).unwrap_or_default()),
+            body: Content::Raw(body),
             problem: None,
             hidden: None,
         }
@@ -885,6 +924,20 @@ fn stream_of(
             Err(_) => Some((Ok(Bytes::from_static(b": keep-alive\n\n")), events)),
         }
     })
+}
+
+/// The content of `file` read whole from its start, the read of `body` and
+/// `body_bytes`; empty when it cannot be read.
+fn read_whole(file: &std::fs::File) -> Vec<u8> {
+    let mut file = file;
+    let mut read = Vec::new();
+    let whole = file
+        .seek(SeekFrom::Start(0))
+        .and_then(|_| file.read_to_end(&mut read));
+    match whole {
+        Ok(_) => read,
+        Err(_) => Vec::new(),
+    }
 }
 
 /// `text` read as the `T` of the parameter `name`; a 400 naming it.

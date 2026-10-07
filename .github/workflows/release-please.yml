@@ -57,9 +57,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Install varyk
-        # The varyk minor that ships milestone 5b4, which this package needs;
+        # The varyk minor that ships milestone 5c, which this package needs;
         # the README's version table says which varyk-http works with which varyk.
-        run: cargo install varyk --version '^0.7' --locked
+        run: cargo install varyk --version '^0.8' --locked
 
       - name: Publish varyk-http
         # Assembles the plain Rust crate from the package, then runs cargo publish.
