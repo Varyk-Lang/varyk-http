@@ -810,7 +810,8 @@ process.
   check and the tests. Both install varyk 0.7 from crates.io, and the
   demo uses the published `varyk-sql` 0.2, the release for the same
   varyk. A weekly "Latest varyk" job, as `varyk-sql` has, tries the
-  newest varyk on crates.io, so a red run says a release is due.
+  newest varyk on crates.io, so a red run warns early that a newer
+  varyk changed something the package's Rust calls.
 - No `unwrap`, `expect`, or other crash-on-absence call in the facade.
 - CONTRIBUTING.md's "Where things are" says most tests send requests
   through `app.request` and the event-stream, client, and in-flight
