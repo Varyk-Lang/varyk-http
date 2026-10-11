@@ -7,8 +7,8 @@ client for Varyk services, on [axum](https://github.com/tokio-rs/axum),
 [reqwest](https://github.com/seanmonstar/reqwest).
 
 varyk-http 0.2.0 is on [crates.io](https://crates.io/crates/varyk-http)
-and works with varyk 0.8 (see [Versions](#versions)). Varyk is
-experimental and pre-1.0: anything here may change.
+and works with varyk 0.8 or later (see [Versions](#versions)). Varyk
+is experimental and pre-1.0: anything here may change.
 
 The package covers what an ordinary production API needs and nothing
 more: routes the compiler checks, hooks, safe defaults, errors that
@@ -20,7 +20,7 @@ what the compiler does with routes is the HTTP section of Varyk's
 ## Install
 
 ```sh
-cargo install varyk --version '^0.8' --locked
+cargo install varyk --locked
 varyk init users
 cd users
 varyk add http sql
@@ -572,7 +572,7 @@ image has Debian 12's C library, so the build stage is Debian 12 too:
 
 ```dockerfile
 FROM rust:1-bookworm AS build
-RUN cargo install varyk --version '^0.8' --locked
+RUN cargo install varyk --locked
 WORKDIR /src
 COPY . .
 RUN varyk build --release
@@ -728,14 +728,18 @@ file bodies still being sent.
 
 ## Versions
 
-The compiler writes code that calls this package, and a program and
-its packages must resolve to one `varyk-std`, so each minor varyk
-release is followed by a varyk-http release.
+Since varyk 0.9.0, a package's `varyk-std` line is the oldest varyk
+it builds with: a program that uses varyk-http 0.2 builds under varyk
+0.8 or any later one, so a minor varyk release no longer needs a
+varyk-http release at once. A release that moves the line still follows,
+when convenient, since `varyk publish` of a library that uses
+varyk-http needs a varyk on the same minor as that line. Earlier
+releases were each written for the one varyk the table names.
 
 | varyk-http | varyk |
 |---|---|
 | 0.1 | 0.7 |
-| 0.2 | 0.8 |
+| 0.2 | 0.8 or later |
 
 ## Security
 
