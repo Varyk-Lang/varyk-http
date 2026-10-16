@@ -1238,6 +1238,14 @@ where
     }
 }
 
+/// The loopback port of test `n`, the same as `port(n)` in `src/tests.vr`:
+/// below 32768, where no outgoing connection is given one (see
+/// CONTRIBUTING.md).
+#[cfg(test)]
+pub(crate) fn test_port(n: u16) -> u16 {
+    31800 + n
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -1246,7 +1254,7 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;
 
-    use super::App;
+    use super::{App, test_port};
 
     /// Serves an app with no routes on `port`, with an idle timeout of
     /// one second.
@@ -1295,7 +1303,7 @@ mod tests {
     #[test]
     fn a_connection_that_sends_part_of_its_headers_is_closed() {
         varyk_std::run(async {
-            let mut stream = serve(41818).await;
+            let mut stream = serve(test_port(18)).await;
             write(&mut stream, "GET /hello HTTP/1.1\r\nHost: a\r\n").await;
             assert!(by_the_timeout(closed_after(&mut stream).await));
         });
@@ -1304,7 +1312,7 @@ mod tests {
     #[test]
     fn an_idle_kept_alive_connection_is_closed() {
         varyk_std::run(async {
-            let mut stream = serve(41819).await;
+            let mut stream = serve(test_port(19)).await;
             write(&mut stream, "GET /hello HTTP/1.1\r\nHost: a\r\n\r\n").await;
             assert!(by_the_timeout(closed_after(&mut stream).await));
         });

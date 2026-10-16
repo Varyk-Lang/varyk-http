@@ -75,9 +75,14 @@ follows each minor varyk when convenient, not at once.
   handler of another module, for a route that names one. Most send
   requests through `app.request`, with no port; the event-stream,
   client, in-flight, WebSocket, and idle-timeout tests serve on a fixed
-  loopback port, from 41801 up, one port per test, so tests running at once never
-  share one. The file tests serve from `testdata/` (a text file, and a
-  link pointing out of the folder that must stay refused), and the
+  loopback port, one per test, so tests running at once never share one:
+  test `n` serves on `port(n)` in `src/tests.vr`, or `test_port(n)` in
+  the Rust tests, which is 31800 + `n`. The base is written in those two
+  functions only. It stays below 32768, outside the range Linux (32768 to
+  60999) and macOS (from 49152) give to outgoing connections, so a client
+  socket of another test cannot hold a test's port. The file tests serve from
+  `testdata/` (a text file, and a link pointing out of the folder that
+  must stay refused), and the
   upload tests write under the git-ignored `target/`, so run `varyk
   test` from the package's folder, as CI does.
 - `demo/users` is the users API of the README's first service, on

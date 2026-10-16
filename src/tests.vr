@@ -1866,7 +1866,18 @@ async fn a_websocket_route_is_a_400_under_request() {
 }
 
 // Against a real server (spec 7): `serve` on a fixed loopback port per
-// test, started as a detached task, which ends with the test.
+// test, started as a detached task, which ends with the test. Test `n`
+// serves on `port(n)`; nothing listens on `port(99)`. The ports are below
+// 32768, where no outgoing connection is given one (see CONTRIBUTING.md),
+// and the Rust tests take theirs from `test_port` in `src/server.rs`.
+fn port(n: u16) -> u16 {
+    31800 + n
+}
+
+// `path` on the server of test `n`.
+fn url(n: u16, path: string) -> string {
+    format!("http://127.0.0.1:{}{}", port(n), path)
+}
 
 struct Note {
     text: string,
@@ -1897,11 +1908,11 @@ async fn hop() -> crate::Response {
 }
 
 async fn away_host() -> crate::Response {
-    redirect("http://localhost:41801/hello")
+    redirect(format!("http://localhost:{}/hello", port(1)))
 }
 
 async fn away_port() -> crate::Response {
-    redirect("http://127.0.0.1:41899/hello")
+    redirect(url(99, "/hello"))
 }
 
 async fn chain(n: i64) -> crate::Response {
@@ -1955,15 +1966,15 @@ async fn fetch(client: crate::Client, url: string) -> crate::Response {
 #[test]
 async fn the_client_gets_and_sends_json() {
     let app = served_app();
-    app.serve(41801).detach();
+    app.serve(port(1)).detach();
     time::sleep(50).await;
     let client = crate::Client::new();
-    let r = fetch(client, "http://127.0.0.1:41801/hello").await;
+    let r = fetch(client, url(1, "/hello")).await;
     assert_eq(r.status(), 200);
     assert_eq(r.body(), "\"hello\"");
     assert_eq(r.header("content-type"), Some("application/json"));
     let note = Note { text: "hi" };
-    let r = match client.post("http://127.0.0.1:41801/notes", note).await {
+    let r = match client.post(url(1, "/notes"), note).await {
         Ok(r) => r,
         Err(e) => failed(e),
     };
@@ -1974,17 +1985,17 @@ async fn the_client_gets_and_sends_json() {
         Ok(n) => assert_eq(n.text, "got hi"),
         Err(e) => assert_eq(e.message(), "no error"),
     }
-    let r = match client.put("http://127.0.0.1:41801/notes", "not a note").await {
+    let r = match client.put(url(1, "/notes"), "not a note").await {
         Ok(r) => r,
         Err(e) => failed(e),
     };
     assert_eq(r.status(), 400);
-    let r = match client.patch("http://127.0.0.1:41801/notes", note).await {
+    let r = match client.patch(url(1, "/notes"), note).await {
         Ok(r) => r,
         Err(e) => failed(e),
     };
     assert_eq(r.body(), "{\"text\":\"got hi\"}");
-    let r = match client.delete("http://127.0.0.1:41801/hello").await {
+    let r = match client.delete(url(1, "/hello")).await {
         Ok(r) => r,
         Err(e) => failed(e),
     };
@@ -1994,10 +2005,10 @@ async fn the_client_gets_and_sends_json() {
 #[test]
 async fn a_response_of_any_status_is_ok() {
     let app = served_app();
-    app.serve(41802).detach();
+    app.serve(port(2)).detach();
     time::sleep(50).await;
     let client = crate::Client::new();
-    let r = fetch(client, "http://127.0.0.1:41802/nowhere").await;
+    let r = fetch(client, url(2, "/nowhere")).await;
     assert_eq(r.status(), 404);
     assert_eq(r.body(), "{\"error\":\"not found\"}");
 }
@@ -2006,22 +2017,22 @@ async fn a_response_of_any_status_is_ok() {
 async fn the_client_sends_its_headers() {
     let mut app = crate::App::new(Shared::new(Config { word: "hello" }));
     app.get("/echo", echo);
-    app.serve(41803).detach();
+    app.serve(port(3)).detach();
     time::sleep(50).await;
     let mut client = crate::Client::new();
     client.set_header("x-name", "Ada");
-    let r = fetch(client, "http://127.0.0.1:41803/echo").await;
+    let r = fetch(client, url(3, "/echo")).await;
     assert_eq(r.body(), "\"GET /echo Ada\"");
 }
 
 #[test]
 async fn a_response_slower_than_the_client_timeout_is_an_err() {
     let app = served_app();
-    app.serve(41804).detach();
+    app.serve(port(4)).detach();
     time::sleep(50).await;
     let mut client = crate::Client::new();
     client.set_timeout(100);
-    let r = fetch(client, "http://127.0.0.1:41804/slow").await;
+    let r = fetch(client, url(4, "/slow")).await;
     assert_eq(r.status(), 0);
     assert_eq(r.body(), "the request to http://127.0.0.1 timed out after 100 ms");
 }
@@ -2029,35 +2040,35 @@ async fn a_response_slower_than_the_client_timeout_is_an_err() {
 #[test]
 async fn a_body_over_the_client_limit_is_an_err() {
     let app = served_app();
-    app.serve(41805).detach();
+    app.serve(port(5)).detach();
     time::sleep(50).await;
     let mut client = crate::Client::new();
     client.set_body_limit(10);
-    let r = fetch(client, "http://127.0.0.1:41805/long").await;
+    let r = fetch(client, url(5, "/long")).await;
     assert_eq(r.status(), 0);
     assert_eq(r.body(), "the response from http://127.0.0.1 is larger than the body limit of 10 bytes");
     client.set_body_limit(1000);
-    let r = fetch(client, "http://127.0.0.1:41805/long").await;
+    let r = fetch(client, url(5, "/long")).await;
     assert_eq(r.status(), 200);
 }
 
 #[test]
 async fn a_redirect_is_followed_only_to_the_same_origin() {
     let app = served_app();
-    app.serve(41806).detach();
+    app.serve(port(6)).detach();
     time::sleep(50).await;
     let client = crate::Client::new();
-    let r = fetch(client, "http://127.0.0.1:41806/hop").await;
+    let r = fetch(client, url(6, "/hop")).await;
     assert_eq(r.status(), 200);
     assert_eq(r.body(), "\"hello\"");
-    let r = fetch(client, "http://127.0.0.1:41806/away-host").await;
+    let r = fetch(client, url(6, "/away-host")).await;
     assert_eq(r.status(), 302);
-    assert_eq(r.header("location"), Some("http://localhost:41801/hello"));
-    let r = fetch(client, "http://127.0.0.1:41806/away-port").await;
+    assert_eq(r.header("location"), Some(format!("http://localhost:{}/hello", port(1))));
+    let r = fetch(client, url(6, "/away-port")).await;
     assert_eq(r.status(), 302);
-    assert_eq(r.header("location"), Some("http://127.0.0.1:41899/hello"));
+    assert_eq(r.header("location"), Some(url(99, "/hello")));
     // Ten redirects are followed; the eleventh is given back.
-    let r = fetch(client, "http://127.0.0.1:41806/chain/0").await;
+    let r = fetch(client, url(6, "/chain/0")).await;
     assert_eq(r.status(), 302);
     assert_eq(r.header("location"), Some("/chain/11"));
 }
@@ -2084,25 +2095,25 @@ async fn a_client_error_names_only_the_scheme_and_host() {
 async fn a_client_setting_that_cannot_work_is_the_err_of_every_call() {
     let mut client = crate::Client::new();
     client.set_header("x-token", "one\ntwo");
-    let r = fetch(client, "http://127.0.0.1:41807/hello").await;
+    let r = fetch(client, url(7, "/hello")).await;
     assert_eq(r.body(), "the client cannot be built: set_header(\"x-token\", ..) cannot work: the name or the value is not valid HTTP");
     let mut client = crate::Client::new();
     client.set_timeout(0);
-    let r = fetch(client, "http://127.0.0.1:41807/hello").await;
+    let r = fetch(client, url(7, "/hello")).await;
     assert_eq(r.body(), "the client cannot be built: set_timeout(0) cannot work: the timeout is at least 1 millisecond");
     let mut client = crate::Client::new();
     client.set_body_limit(0);
-    let r = fetch(client, "http://127.0.0.1:41807/hello").await;
+    let r = fetch(client, url(7, "/hello")).await;
     assert_eq(r.body(), "the client cannot be built: set_body_limit(0) cannot work: the limit is at least 1 byte");
 }
 
 #[test]
 async fn three_events_are_read_whole_by_the_client() {
     let app = served_app();
-    app.serve(41808).detach();
+    app.serve(port(8)).detach();
     time::sleep(50).await;
     let client = crate::Client::new();
-    let r = fetch(client, "http://127.0.0.1:41808/events").await;
+    let r = fetch(client, url(8, "/events")).await;
     assert_eq(r.status(), 200);
     assert_eq(r.header("content-type"), Some("text/event-stream"));
     assert_eq(r.body(), "data: one\n\nevent: tick\ndata: two\ndata: lines\n\ndata: three\n\n");
@@ -2113,12 +2124,12 @@ async fn three_events_are_read_whole_by_the_client() {
 #[test]
 async fn the_client_sends_and_reads_bytes() {
     let app = served_app();
-    app.serve(41822).detach();
+    app.serve(port(22)).detach();
     time::sleep(50).await;
     let client = crate::Client::new();
     // ff 00 01 02 80 fe
     let sent = raw("/wABAoD+");
-    let r = match client.post_bytes("http://127.0.0.1:41822/bytes", sent, "image/x-test").await {
+    let r = match client.post_bytes(url(22, "/bytes"), sent, "image/x-test").await {
         Ok(r) => r,
         Err(e) => failed(e),
     };
@@ -2126,7 +2137,7 @@ async fn the_client_sends_and_reads_bytes() {
     assert_eq(r.body_bytes(), sent);
     assert_eq(r.header("content-type"), Some("image/x-test"));
     assert_eq(r.body(), "");
-    let r = match client.put_bytes("http://127.0.0.1:41822/bytes", sent, "application/octet-stream").await {
+    let r = match client.put_bytes(url(22, "/bytes"), sent, "application/octet-stream").await {
         Ok(r) => r,
         Err(e) => failed(e),
     };
@@ -2134,30 +2145,30 @@ async fn the_client_sends_and_reads_bytes() {
     assert_eq(r.body_bytes(), sent);
     assert_eq(r.header("content-type"), Some("application/octet-stream"));
     // The JSON calls keep their type.
-    let r = match client.post("http://127.0.0.1:41822/bytes", "hi").await {
+    let r = match client.post(url(22, "/bytes"), "hi").await {
         Ok(r) => r,
         Err(e) => failed(e),
     };
     assert_eq(r.body(), "\"hi\"");
     assert_eq(r.header("content-type"), Some("application/json"));
-    let r = fetch(client, "http://127.0.0.1:41822/png").await;
+    let r = fetch(client, url(22, "/png")).await;
     assert_eq(r.status(), 200);
     assert_eq(r.body_bytes(), raw("iVBORw0KGgo="));
     assert_eq(r.body(), "");
 }
 
 // Plan, Review Focus 5: a content type that is not a header value is an
-// `Err` before anything is sent (nothing listens on 41899, so a request
-// sent would fail otherwise), naming no path or query.
+// `Err` before anything is sent (nothing listens on `port(99)`, so a
+// request sent would fail otherwise), naming no path or query.
 #[test]
 async fn a_bytes_content_type_that_is_not_valid_http_is_an_err() {
     let client = crate::Client::new();
     let kind = format!("a{}b", crlf());
-    match client.post_bytes("http://127.0.0.1:41899/private?token=s3cret", raw("/wABAoD+"), kind).await {
+    match client.post_bytes(url(99, "/private?token=s3cret"), raw("/wABAoD+"), kind).await {
         Ok(r) => assert_eq(r.status(), 0),
         Err(e) => assert_eq(e.message(), "the content type is not valid HTTP"),
     }
-    match client.put_bytes("http://127.0.0.1:41899/private?token=s3cret", raw("/wABAoD+"), kind).await {
+    match client.put_bytes(url(99, "/private?token=s3cret"), raw("/wABAoD+"), kind).await {
         Ok(r) => assert_eq(r.status(), 0),
         Err(e) => assert_eq(e.message(), "the content type is not valid HTTP"),
     }
@@ -2174,11 +2185,11 @@ async fn status_or_zero(client: crate::Client, url: string) -> u16 {
 async fn beyond_the_in_flight_limit_a_request_is_a_503() {
     let mut app = served_app();
     app.set_max_in_flight(1);
-    app.serve(41809).detach();
+    app.serve(port(9)).detach();
     time::sleep(50).await;
     let client = crate::Client::new();
-    let a = client.clone().get("http://127.0.0.1:41809/slow");
-    let b = client.clone().get("http://127.0.0.1:41809/slow");
+    let a = client.clone().get(url(9, "/slow"));
+    let b = client.clone().get(url(9, "/slow"));
     let one = match a.await {
         Ok(r) => r.status(),
         Err(_) => 0,
@@ -2189,18 +2200,18 @@ async fn beyond_the_in_flight_limit_a_request_is_a_503() {
     };
     assert((one == 200 && two == 503) || (one == 503 && two == 200));
     // The permit is given back: the next request is served.
-    assert_eq(status_or_zero(client, "http://127.0.0.1:41809/hello").await, 200);
+    assert_eq(status_or_zero(client, url(9, "/hello")).await, 200);
 }
 
 #[test]
 async fn serving_on_a_port_in_use_is_an_err() {
     let app = served_app();
-    app.serve(41810).detach();
+    app.serve(port(10)).detach();
     time::sleep(50).await;
     let other = served_app();
-    match other.serve(41810).await {
+    match other.serve(port(10)).await {
         Ok(_) => assert_eq("served", "an error"),
-        Err(e) => assert(e.message().starts_with("cannot serve on 127.0.0.1:41810: ")),
+        Err(e) => assert(e.message().starts_with(format!("cannot serve on 127.0.0.1:{}: ", port(10)))),
     }
 }
 
@@ -2208,21 +2219,21 @@ async fn serving_on_a_port_in_use_is_an_err() {
 async fn a_setting_that_cannot_work_is_an_err_from_serve() {
     let mut app = served_app();
     app.set_timeout(0);
-    match app.serve(41811).await {
+    match app.serve(port(11)).await {
         Ok(_) => assert_eq("served", "an error"),
-        Err(e) => assert_eq(e.message(), "cannot serve on 127.0.0.1:41811: set_timeout(0) cannot work: the timeout is at least 1 millisecond"),
+        Err(e) => assert_eq(e.message(), format!("cannot serve on 127.0.0.1:{}: set_timeout(0) cannot work: the timeout is at least 1 millisecond", port(11))),
     }
     let mut app = served_app();
     app.set_address("::1");
     app.set_body_limit(0);
-    match app.serve(41811).await {
+    match app.serve(port(11)).await {
         Ok(_) => assert_eq("served", "an error"),
-        Err(e) => assert_eq(e.message(), "cannot serve on [::1]:41811: set_body_limit(0) cannot work: the limit is at least 1 byte"),
+        Err(e) => assert_eq(e.message(), format!("cannot serve on [::1]:{}: set_body_limit(0) cannot work: the limit is at least 1 byte", port(11))),
     }
     let mut app = served_app();
     app.set_idle_timeout(0);
-    match app.serve(41811).await {
+    match app.serve(port(11)).await {
         Ok(_) => assert_eq("served", "an error"),
-        Err(e) => assert_eq(e.message(), "cannot serve on 127.0.0.1:41811: set_idle_timeout(0) cannot work: the timeout is at least 1 millisecond"),
+        Err(e) => assert_eq(e.message(), format!("cannot serve on 127.0.0.1:{}: set_idle_timeout(0) cannot work: the timeout is at least 1 millisecond", port(11))),
     }
 }
