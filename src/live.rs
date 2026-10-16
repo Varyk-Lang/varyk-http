@@ -671,7 +671,7 @@ mod tests {
 
     use super::WebSocket;
     use crate::message::{Request, Response, respond_empty, respond_error};
-    use crate::server::{App, route};
+    use crate::server::{App, route, test_port};
 
     type Client = tokio_tungstenite::WebSocketStream<
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
@@ -785,8 +785,8 @@ mod tests {
     #[test]
     fn text_is_echoed_and_a_ping_answered() {
         varyk_std::run(async {
-            serve(41812).await;
-            let mut client = connect(41812, "/echo").await;
+            serve(test_port(12)).await;
+            let mut client = connect(test_port(12), "/echo").await;
             send(&mut client, Message::text("hello")).await;
             assert_eq!(next(&mut client).await, Message::text("hello"));
             send(&mut client, Message::Ping("are you there".into())).await;
@@ -802,8 +802,8 @@ mod tests {
     #[test]
     fn a_binary_message_closes_with_1003() {
         varyk_std::run(async {
-            serve(41813).await;
-            let mut client = connect(41813, "/echo").await;
+            serve(test_port(13)).await;
+            let mut client = connect(test_port(13), "/echo").await;
             send(&mut client, Message::binary(vec![1, 2, 3])).await;
             assert_eq!(closed_with(&mut client).await, CloseCode::Unsupported);
         });
@@ -812,8 +812,8 @@ mod tests {
     #[test]
     fn a_binary_message_is_given_by_recv_message() {
         varyk_std::run(async {
-            serve(41820).await;
-            let mut client = connect(41820, "/messages").await;
+            serve(test_port(20)).await;
+            let mut client = connect(test_port(20), "/messages").await;
             send(&mut client, Message::binary(vec![0xff, 0x00, 0x80])).await;
             assert_eq!(
                 next(&mut client).await,
@@ -834,8 +834,8 @@ mod tests {
     #[test]
     fn a_binary_message_over_the_limit_closes_with_1009_under_recv_message() {
         varyk_std::run(async {
-            serve(41821).await;
-            let mut client = connect(41821, "/messages").await;
+            serve(test_port(21)).await;
+            let mut client = connect(test_port(21), "/messages").await;
             send(&mut client, Message::binary(vec![0xff; 100])).await;
             assert_eq!(closed_with(&mut client).await, CloseCode::Size);
         });
@@ -844,8 +844,8 @@ mod tests {
     #[test]
     fn a_message_over_the_body_limit_closes_with_1009() {
         varyk_std::run(async {
-            serve(41814).await;
-            let mut client = connect(41814, "/echo").await;
+            serve(test_port(14)).await;
+            let mut client = connect(test_port(14), "/echo").await;
             send(&mut client, Message::text("x".repeat(100))).await;
             assert_eq!(closed_with(&mut client).await, CloseCode::Size);
         });
@@ -856,8 +856,8 @@ mod tests {
         use tokio_tungstenite::tungstenite::protocol::frame::Frame;
         use tokio_tungstenite::tungstenite::protocol::frame::coding::{Data, OpCode};
         varyk_std::run(async {
-            serve(41817).await;
-            let mut client = connect(41817, "/echo").await;
+            serve(test_port(17)).await;
+            let mut client = connect(test_port(17), "/echo").await;
             let frame = Frame::message(vec![0xff, 0xfe], OpCode::Data(Data::Text), true);
             send(&mut client, Message::Frame(frame)).await;
             assert_eq!(closed_with(&mut client).await, CloseCode::Invalid);
@@ -867,20 +867,20 @@ mod tests {
     #[test]
     fn either_side_closes_normally() {
         varyk_std::run(async {
-            serve(41815).await;
+            serve(test_port(15)).await;
             // The client closes: the handler's `recv` gives `None`, and the
             // server replies.
-            let mut client = connect(41815, "/echo").await;
+            let mut client = connect(test_port(15), "/echo").await;
             if let Err(err) = client.close(None).await {
                 panic!("cannot close: {err}");
             }
             assert!(matches!(next(&mut client).await, Message::Close(_)));
             // The handler closes.
-            let mut client = connect(41815, "/echo").await;
+            let mut client = connect(test_port(15), "/echo").await;
             send(&mut client, Message::text("bye")).await;
             assert_eq!(closed_with(&mut client).await, CloseCode::Normal);
             // The handler returns.
-            let mut client = connect(41815, "/hello").await;
+            let mut client = connect(test_port(15), "/hello").await;
             assert_eq!(next(&mut client).await, Message::text("hi"));
             assert_eq!(closed_with(&mut client).await, CloseCode::Normal);
         });
@@ -889,15 +889,17 @@ mod tests {
     #[test]
     fn a_path_parameter_that_does_not_parse_is_a_400_not_a_101() {
         varyk_std::run(async {
-            serve(41816).await;
-            match tokio_tungstenite::connect_async("ws://127.0.0.1:41816/rooms/abc").await {
+            let port = test_port(16);
+            serve(port).await;
+            let bad = format!("ws://127.0.0.1:{port}/rooms/abc");
+            match tokio_tungstenite::connect_async(bad).await {
                 Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
                     assert_eq!(response.status().as_u16(), 400);
                 }
                 Err(err) => panic!("expected a 400, got {err}"),
                 Ok(_) => panic!("expected a 400, got a 101"),
             }
-            let mut client = connect(41816, "/rooms/7").await;
+            let mut client = connect(port, "/rooms/7").await;
             send(&mut client, Message::text("in")).await;
             assert_eq!(next(&mut client).await, Message::text("in"));
         });
